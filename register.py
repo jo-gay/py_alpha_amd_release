@@ -88,7 +88,7 @@ class Register:
 
     def add_initial_transform(self, transform, param_scaling=None):
         if param_scaling is None:
-            param_scaling = np.ones((transforms.get_param_count(),))
+            param_scaling = np.ones((transform.get_param_count(),))
         self.initial_transforms.append(transform)
         self.transforms_param_scaling.append(param_scaling)
     
