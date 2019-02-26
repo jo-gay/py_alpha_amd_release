@@ -75,6 +75,9 @@ class TransformBase:
         raise NotImplementedError
 
     def warp(self, In, Out, in_spacing=None, out_spacing=None, mode='spline', bg_value=0.0):
+        if out_spacing is None: 
+            out_spacing = np.array([1.0]*Out.ndim)
+
         linspaces = [np.linspace(0, Out.shape[i]*out_spacing[i], Out.shape[i], endpoint=False) for i in range(Out.ndim)]
 
         grid = np.array(np.meshgrid(*linspaces,indexing='ij'))
