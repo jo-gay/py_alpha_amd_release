@@ -1,10 +1,10 @@
 
 #
 # Py-Alpha-AMD Registration Framework
-# Author: Johan Ofverstedt
+# Author: Johan Ofverstedt and Nicolas Pielawski
 # Reference: Fast and Robust Symmetric Image Registration Based on Distances Combining Intensity and Spatial Information
 #
-# Copyright 2019 Johan Ofverstedt
+# Copyright 2019 Johan Ofverstedt and Nicolas Pielawski
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
 # to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -59,10 +59,10 @@ class AdamOptimizer:
     def set_adam_beta1(self, beta1):
         self.adam_beta1 = beta1
 
-    def set_adam_beta2(self, beta1):
+    def set_adam_beta2(self, beta2):
         self.adam_beta2 = beta2
 
-    def set_adam_eps(self, beta1):
+    def set_adam_eps(self, eps):
         self.adam_eps = eps
 
     def set_gradient_magnitude_threshold(self, gmt):
