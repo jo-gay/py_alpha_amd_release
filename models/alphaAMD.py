@@ -38,6 +38,10 @@ from distances import symmetric_amd_distance
 
 class RegisterAlphaAMD(Register):
     
+    def __init__(self, dims):
+        super().__init__(dims)
+        self.alpha_levels = 7
+    
     def set_alpha_levels(self, alpha_levels):
         self.alpha_levels = alpha_levels
 

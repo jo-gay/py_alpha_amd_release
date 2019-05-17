@@ -3,7 +3,7 @@
 
 #
 # Py-Alpha-AMD Registration Framework
-# Author: Johan Ofverstedt
+# Authors: Johan Ofverstedt, Jo Gay
 # Reference: Fast and Robust Symmetric Image Registration Based on Distances Combining Intensity and Spatial Information
 #
 # Copyright 2019 Johan Ofverstedt
@@ -21,48 +21,36 @@
 #
 
 #
-# Registration framework for AlphaAMD
+# Registration framework for Mutual Information
 #
 
 # Import Numpy/Scipy
 import numpy as np
+from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
+
+# Import distances
+from distances import MIDistance
 
 # Import Register base class
 from models import Register
 
-# Import distances required for alphaAMD
-from distances import QuantizedImage
-from distances import alpha_amd
-from distances import symmetric_amd_distance
-
-
 class RegisterMI(Register):
+
+    def __init__(self, dims):
+        super().__init__(dims)
+        self.mi_fun = mutual_info_score
     
+    # set or change the choice of mutual information function. It must take a pair of 1D vectors and return a scalar
+    def set_mutual_info_fun(self, fun):
+        self.mi_fun = fun
+        
     def make_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_weights, flo_mask_resampled, pyramid_factor):
 
-        ref_diag = np.sqrt(np.square(np.array(ref_resampled.shape)*self.ref_spacing).sum())
-        flo_diag = np.sqrt(np.square(np.array(flo_resampled.shape)*self.flo_spacing).sum())
+        mi_dist = MIDistance(self.mi_fun)
+        mi_dist.set_ref_image(ref_resampled)
+        mi_dist.set_flo_image(flo_resampled)
 
-        q_ref = QuantizedImage(ref_resampled, self.alpha_levels, ref_weights, self.ref_spacing*pyramid_factor, remove_zero_weight_pnts = True)
-        q_flo = QuantizedImage(flo_resampled, self.alpha_levels, flo_weights, self.flo_spacing*pyramid_factor, remove_zero_weight_pnts = True)
-
-        tf_ref = alpha_amd.AlphaAMD(q_ref, self.alpha_levels, ref_diag, self.ref_spacing*pyramid_factor, ref_mask_resampled, ref_mask_resampled, interpolator_mode='linear', dt_fun = None, mask_out_edges = True)
-        tf_flo = alpha_amd.AlphaAMD(q_flo, self.alpha_levels, flo_diag, self.flo_spacing*pyramid_factor, flo_mask_resampled, flo_mask_resampled, interpolator_mode='linear', dt_fun = None, mask_out_edges = True)
-
-        symmetric_measure = True
-        squared_measure = False
-
-        sym_dist = symmetric_amd_distance.SymmetricAMDDistance(symmetric_measure=symmetric_measure, squared_measure=squared_measure)
-
-        sym_dist.set_ref_image_source(q_ref)
-        sym_dist.set_ref_image_target(tf_ref)
-
-        sym_dist.set_flo_image_source(q_flo)
-        sym_dist.set_flo_image_target(tf_flo)
-
-        sym_dist.set_sampling_fraction(self.sampling_fraction)
-
-        sym_dist.initialize()
-        return sym_dist
+        mi_dist.initialize()
+        return mi_dist
 

@@ -54,7 +54,7 @@ import time
 import os
 
 # Choice of registration method out of ('alphaAMD', 'MI')
-param_method = 'alphaAMD'
+param_method = 'mi'
 # Registration Parameters
 alpha_levels = 7
 # Pixel-size
@@ -72,19 +72,29 @@ param_sampling_fraction = 1.0
 param_report_freq = 0
 
 # Choice of optimizer from those available ('sgd', 'adam', 'scipy')
-param_optimizer = 'scipy'
+param_optimizer = 'gridsearch'
 
+# Where should output files be saved
+param_outdir = './test_images/output/'
+
+# Default path for ref and flo images
+example_ref_im = './test_images/reference_example.png'
+example_flo_im = './test_images/floating_example.png'
+
+#ref_im_path = './test_images/roi_148184_6.tif'
+#flo_im_path = './test_images/mpm_148184_6_gs.tif'
 
 def main():
     #np.random.seed(1000)
-    
-    if len(sys.argv) < 3:
-        print('register_example.py: Too few parameters. Give the path to two gray-scale image files.')
-        print('Example: python2 register_example.py reference_image floating_image')
-        return False
 
-    ref_im_path = sys.argv[1]
-    flo_im_path = sys.argv[2]
+    if len(sys.argv) > 1:
+        ref_im_path = sys.argv[1]
+    else:
+        ref_im_path = example_ref_im
+    if len(sys.argv) > 2:
+        flo_im_path = sys.argv[2]
+    else:
+        flo_im_path= example_flo_im
 
     print('Registering floating image %s with reference image %s'%(flo_im_path, ref_im_path))
     print('Similarity measure %s, optimizer %s'%(param_method, param_optimizer))
@@ -98,26 +108,25 @@ def main():
     ref_im_orig = ref_im.copy()
     flo_im_orig = flo_im.copy()
 
-    ref_im = filters.normalize(ref_im, 0.0, None)
-    flo_im = filters.normalize(flo_im, 0.0, None)
-    
-    diag = 0.5 * (transforms.image_diagonal(ref_im, spacing) + transforms.image_diagonal(flo_im, spacing))
+    # Initialize registration model for 2d images and do specific preprocessing and setup for that model
+    if param_method.lower() == 'alphaamd':
+        reg = models.RegisterAlphaAMD(2)
+        reg.set_alpha_levels(alpha_levels)
+        ref_im = filters.normalize(ref_im, 0.0, None)
+        flo_im = filters.normalize(flo_im, 0.0, None)
+    elif param_method.lower() == 'mi':
+        ref_im = filters.normalize(ref_im, 0.0, None)
+        flo_im = filters.normalize(flo_im, 0.0, None)
+        reg = models.RegisterMI(2)
+    else:
+        raise NotImplementedError('Method must be one of alphaAMD, MI')
+    reg.set_report_freq(param_report_freq)
 
+    # Generic initialization steps required for every registration model
     weights1 = np.ones(ref_im.shape)
     mask1 = np.ones(ref_im.shape, 'bool')
     weights2 = np.ones(flo_im.shape)
     mask2 = np.ones(flo_im.shape, 'bool')
-
-    # Initialize registration framework for 2d images
-    if param_method.lower() == 'alphaamd':
-        reg = models.RegisterAlphaAMD(2)
-        reg.set_alpha_levels(alpha_levels)
-    elif param_method.lower() == 'mi':
-        reg = models.RegisterMI(2)
-    else:
-        raise NotImplementedError('Method must be one of alphaAMD, MI')
-
-    reg.set_report_freq(param_report_freq)
 
     reg.set_reference_image(ref_im)
     reg.set_reference_mask(mask1)
@@ -134,12 +143,16 @@ def main():
 
     # Learning-rate / Step lengths [[start1, end1], [start2, end2] ...] (for each pyramid level)
     step_lengths = np.array([[1., 1.], [1., 0.5], [0.5, 0.1]])
+    
+    # Estimate an appropriate parameter scaling based on the sizes of the images.
+    diag = transforms.image_diagonal(ref_im, spacing) + transforms.image_diagonal(flo_im, spacing)
+    diag = 2.0/diag
 
     # Create the transform and add it to the registration framework (switch between affine/rigid transforms by commenting/uncommenting)
     # Affine
-    reg.add_initial_transform(transforms.AffineTransform(2), param_scaling=np.array([1.0/diag, 1.0/diag, 1.0/diag, 1.0/diag, 1.0, 1.0]))
+    reg.add_initial_transform(transforms.AffineTransform(2), param_scaling=np.array([diag, diag, diag, diag, 1.0, 1.0]))
     # Rigid 2D
-    #reg.add_initial_transform(transforms.Rigid2DTransform(), param_scaling=np.array([1.0/diag, 1.0, 1.0]))
+    #reg.add_initial_transform(transforms.Rigid2DTransform(), param_scaling=np.array([diag, 1.0, 1.0]))
 
     # Set the parameters
     reg.set_iterations(param_iterations)
@@ -149,12 +162,12 @@ def main():
     reg.set_optimizer(param_optimizer)
 
     # Create output directory
-    directory = os.path.dirname('./test_images/output/')
+    directory = os.path.dirname(param_outdir)
     if not os.path.exists(directory):
         os.makedirs(directory)
 
     # Start the pre-processing
-    reg.initialize('./test_images/output/')
+    reg.initialize(param_outdir)
     
     # Control the formatting of numpy
     np.set_printoptions(suppress=True, linewidth=200)
@@ -177,14 +190,14 @@ def main():
     c.warp(In = flo_im_orig, Out = ref_im_warped, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
 
     # Save the registered image
-    Image.fromarray(ref_im_warped).convert('RGB').save('./test_images/output/registered.png')
+    Image.fromarray(ref_im_warped).convert('RGB').save(param_outdir+'registered.png')
 
     # Compute the absolute difference image between the reference and registered images
     D1 = np.abs(ref_im_orig-ref_im_warped)
     err = np.mean(D1)
     print("Err: %f" % err)
 
-    Image.fromarray(D1).convert('RGB').save('./test_images/output/diff.png')
+    Image.fromarray(D1).convert('RGB').save(param_outdir+'diff.png')
 
     return True
 

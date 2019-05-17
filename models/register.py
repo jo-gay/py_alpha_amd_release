@@ -19,27 +19,23 @@
 #
 
 #
-# Registration framework
+# Registration framework base class. 
 #
 
 # Import Numpy/Scipy
 import numpy as np
 import scipy.misc
 
-# Import distances
-from distances import QuantizedImage
-from distances import alpha_amd
-from distances import symmetric_amd_distance
-
 # Import optimizers
 from optimizers import GradientDescentOptimizer
 from optimizers import AdamOptimizer
-from optimizers import SciPyMinimizer
+from optimizers import SciPyOptimizer
+from optimizers import GridSearchOptimizer
 
 # Import transforms and filters
 import filters, transforms
 
-available_opts = ['adam', 'sgd', 'scipy']
+available_opts = ['adam', 'sgd', 'scipy', 'gridsearch']
 
 class Register:
     def __init__(self, dim):
@@ -47,7 +43,6 @@ class Register:
         self.sampling_fraction = 1.0
         self.step_lengths = np.array([[0.1, 1.0]])
         self.iterations = 1500
-        self.alpha_levels = 7
         self.gradient_magnitude_threshold = 0.00001
         
         self.opt_name = 'adam'
@@ -228,13 +223,18 @@ class Register:
                 elif self.opt_name == 'sgd':
                     opt = GradientDescentOptimizer(self.distances[lvl_it], init_transform.copy())
                 elif self.opt_name == 'scipy':
-                    opt = SciPyMinimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
+                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
                     #For lower resolutions (earlier levels in the pyramid) use smaller steps to avoid
                     #translating too far. Also use a larger gradient tolerance as we don't need high 
                     #accuracy before the final level
                     minim_opts = {'gtol': self.gradient_magnitude_threshold*np.power(self.pyramid_factors[lvl_it], 2), \
-                                  'eps': 0.0001/self.pyramid_factors[lvl_it]}
+                                  'eps': 0.02/self.pyramid_factors[lvl_it]}
                     opt.set_minimizer_options(minim_opts)
+                elif self.opt_name == 'gridsearch':
+                    #TODO: adjust the bounds according to the pyramid level.
+                    bounds = [(-1.5, 1.5), (-1, 1), (-1, 1), (-1.5, 1.5), (-10, 10), (-10, 10)]
+                    steps = 11
+                    opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), bounds, steps)
                 else:
                     raise ValueError('Optimizer name must be one of '+','.join(available_opts))
 

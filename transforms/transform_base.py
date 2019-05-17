@@ -102,6 +102,8 @@ class TransformBase:
             scipy.ndimage.interpolation.map_coordinates(In, coordinates=grid_transformed, output=Out, order=1, cval = bg_value)
         elif mode == 'nearest':
             scipy.ndimage.interpolation.map_coordinates(In, coordinates=grid_transformed, output=Out, order=0, cval = bg_value)
+        else:
+            raise NotImplementedError('Interpolation mode %s has not been implemented'%mode)
 
     def itk_transform_string(self):
         s = '#Insight Transform File V1.0\n'

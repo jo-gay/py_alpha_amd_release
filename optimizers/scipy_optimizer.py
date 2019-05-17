@@ -22,7 +22,7 @@ def _default_report_callback(opt):
     param = opt.get_transform().get_params()
     print("#%d. --- Value: " % (iteration) + str(value) + ", Param: " + str(param))
 
-class SciPyMinimizer:
+class SciPyOptimizer:
 #    methods = ['Nelder-Mead','Powell', 'CG', 'BFGS', 'Newton-CG',\
 #               'L-BFGS-B', 'TNC', 'COBYLA', 'SLSQP', 'trust-constr', \
 #               'dogleg', 'trust-ncg', 'trust-exact', 'trust-krylov']
@@ -30,11 +30,11 @@ class SciPyMinimizer:
 
     '''
     Initialize optimizer with 
-    measure (must have a function get_value() taking a transform object and returning
+    - measure (must have a function get_value() taking a transform object and returning
                a distance measure, such that smaller distance = better registration,
                should be initialized with image data etc);
-    transform (usually subclass of TransformBase, must have get_params());
-    optimization method out of the ones available in scipy.optimize.minimize.
+    - transform (usually subclass of TransformBase, must have get_params());
+    - optimization method out of the ones available in scipy.optimize.minimize.
     '''    
     def __init__(self, measure, transform, method='BFGS'):
         self.method = method
@@ -50,7 +50,7 @@ class SciPyMinimizer:
 #        self.last_grad = np.zeros((transform.get_param_count(),))
         self.iteration = 0
         self.termination_reason = ""
-        self.report_freq = 1
+        self.report_freq = 0
         self.report_func = _default_report_callback
         self.value_history = []
 
@@ -146,7 +146,7 @@ class SciPyMinimizer:
 #        
 #        print('rescaled from ' + \
 #              ','.join(['%.5f']*len(params))%tuple(params))
-#        print('Gives distance %.4f'%ret)
+#        print('Gives distance %.4f'%v)
 #        # END DEBUG
 
         return v
