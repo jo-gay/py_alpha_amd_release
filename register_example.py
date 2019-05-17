@@ -24,34 +24,37 @@
 
 # Import Numpy/Scipy
 import numpy as np
-import scipy as sp
-import imageio
+#import scipy as sp
+from PIL import Image
+
 
 # Import transforms
-from transforms import CompositeTransform
-from transforms import AffineTransform
-from transforms import Rigid2DTransform
-from transforms import Rotate2DTransform
-from transforms import TranslationTransform
-from transforms import ScalingTransform
+#from transforms import CompositeTransform
+#from transforms import AffineTransform
+#from transforms import Rigid2DTransform
+#from transforms import Rotate2DTransform
+#from transforms import TranslationTransform
+#from transforms import ScalingTransform
 import transforms
 
 # Import optimizers
-from optimizers import GradientDescentOptimizer
+#from optimizers import GradientDescentOptimizer
 
 # Import generators and filters
-import generators
+#import generators
 import filters
 
-# Import registration framework
-from register import Register
+# Import registration frameworks
+import models
 
 # Import misc
-import math
+#import math
 import sys
 import time
 import os
 
+# Choice of registration method out of ('alphaAMD', 'MI')
+param_method = 'alphaAMD'
 # Registration Parameters
 alpha_levels = 7
 # Pixel-size
@@ -62,14 +65,18 @@ symmetric_measure = True
 squared_measure = False
 
 # The number of iterations
-param_iterations = 500
+param_iterations = 5000
 # The fraction of the points to sample randomly (0.0-1.0)
-param_sampling_fraction = 0.1
+param_sampling_fraction = 1.0
 # Number of iterations between each printed output (with current distance/gradient/parameters)
-param_report_freq = 50
+param_report_freq = 0
+
+# Choice of optimizer from those available ('sgd', 'adam', 'scipy')
+param_optimizer = 'scipy'
+
 
 def main():
-    np.random.seed(1000)
+    #np.random.seed(1000)
     
     if len(sys.argv) < 3:
         print('register_example.py: Too few parameters. Give the path to two gray-scale image files.')
@@ -79,9 +86,14 @@ def main():
     ref_im_path = sys.argv[1]
     flo_im_path = sys.argv[2]
 
-    ref_im = imageio.imread(ref_im_path, pilmode='L')
-    flo_im = imageio.imread(flo_im_path, pilmode='L')
-    
+    print('Registering floating image %s with reference image %s'%(flo_im_path, ref_im_path))
+    print('Similarity measure %s, optimizer %s'%(param_method, param_optimizer))
+
+    ref_im = Image.open(ref_im_path).convert('L')
+    flo_im = Image.open(flo_im_path).convert('L')
+    ref_im = np.asarray(ref_im)
+    flo_im = np.asarray(flo_im)
+
     # Save copies of original images
     ref_im_orig = ref_im.copy()
     flo_im_orig = flo_im.copy()
@@ -97,10 +109,15 @@ def main():
     mask2 = np.ones(flo_im.shape, 'bool')
 
     # Initialize registration framework for 2d images
-    reg = Register(2)
+    if param_method.lower() == 'alphaamd':
+        reg = models.RegisterAlphaAMD(2)
+        reg.set_alpha_levels(alpha_levels)
+    elif param_method.lower() == 'mi':
+        reg = models.RegisterMI(2)
+    else:
+        raise NotImplementedError('Method must be one of alphaAMD, MI')
 
     reg.set_report_freq(param_report_freq)
-    reg.set_alpha_levels(alpha_levels)
 
     reg.set_reference_image(ref_im)
     reg.set_reference_mask(mask1)
@@ -111,7 +128,6 @@ def main():
     reg.set_floating_weights(weights2)
 
     # Setup the Gaussian pyramid resolution levels
-    
     reg.add_pyramid_level(4, 5.0)
     reg.add_pyramid_level(2, 3.0)
     reg.add_pyramid_level(1, 0.0)
@@ -121,16 +137,16 @@ def main():
 
     # Create the transform and add it to the registration framework (switch between affine/rigid transforms by commenting/uncommenting)
     # Affine
-    reg.add_initial_transform(AffineTransform(2), np.array([1.0/diag, 1.0/diag, 1.0/diag, 1.0/diag, 1.0, 1.0]))
+    reg.add_initial_transform(transforms.AffineTransform(2), param_scaling=np.array([1.0/diag, 1.0/diag, 1.0/diag, 1.0/diag, 1.0, 1.0]))
     # Rigid 2D
-    #reg.add_initial_transform(Rigid2DTransform(), np.array([1.0/diag, 1.0, 1.0]))
+    #reg.add_initial_transform(transforms.Rigid2DTransform(), param_scaling=np.array([1.0/diag, 1.0, 1.0]))
 
     # Set the parameters
     reg.set_iterations(param_iterations)
-    reg.set_gradient_magnitude_threshold(0.001)
+    reg.set_gradient_magnitude_threshold(1e-6)
     reg.set_sampling_fraction(param_sampling_fraction)
     reg.set_step_lengths(step_lengths)
-    reg.set_optimizer('sgd')
+    reg.set_optimizer(param_optimizer)
 
     # Create output directory
     directory = os.path.dirname('./test_images/output/')
@@ -161,14 +177,14 @@ def main():
     c.warp(In = flo_im_orig, Out = ref_im_warped, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
 
     # Save the registered image
-    imageio.imwrite('./test_images/output/registered.png', np.rint(ref_im_warped).astype('uint8'))
+    Image.fromarray(ref_im_warped).convert('RGB').save('./test_images/output/registered.png')
 
     # Compute the absolute difference image between the reference and registered images
     D1 = np.abs(ref_im_orig-ref_im_warped)
     err = np.mean(D1)
     print("Err: %f" % err)
 
-    imageio.imwrite('./test_images/output/diff.png', np.rint(D1).astype('uint8'))
+    Image.fromarray(D1).convert('RGB').save('./test_images/output/diff.png')
 
     return True
 

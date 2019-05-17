@@ -24,16 +24,7 @@
 
 # Import Numpy/Scipy
 import numpy as np
-import scipy as sp
 import scipy.misc
-
-# Import transforms
-from transforms import CompositeTransform
-from transforms import AffineTransform
-from transforms import Rigid2DTransform
-from transforms import Rotate2DTransform
-from transforms import TranslationTransform
-from transforms import ScalingTransform
 
 # Import distances
 from distances import QuantizedImage
@@ -43,16 +34,12 @@ from distances import symmetric_amd_distance
 # Import optimizers
 from optimizers import GradientDescentOptimizer
 from optimizers import AdamOptimizer
+from optimizers import SciPyMinimizer
 
-# Import generators and filters
-import generators
-import filters
+# Import transforms and filters
+import filters, transforms
 
-# Import misc
-import math
-import sys
-import time
-import cProfile, pstats
+available_opts = ['adam', 'sgd', 'scipy']
 
 class Register:
     def __init__(self, dim):
@@ -95,10 +82,10 @@ class Register:
         self.initial_transforms.append(transform)
         self.transforms_param_scaling.append(param_scaling)
     
-    def add_initial_transforms(self, transforms, param_scaling=None):
-        for i, t in enumerate(transforms):
+    def add_initial_transforms(self, transformlist, param_scaling=None):
+        for i, t in enumerate(transformlist):
             if param_scaling is None:
-                pscaling = np.ones((transforms.get_param_count(),))
+                pscaling = np.ones((t.get_param_count(),))
             else:
                 pscaling = param_scaling[i]
             self.add_initial_transform(t, pscaling)
@@ -133,17 +120,14 @@ class Register:
     def set_iterations(self, iterations):
         self.iterations = iterations
 
-    def set_alpha_levels(self, alpha_levels):
-        self.alpha_levels = alpha_levels
-    
     def set_step_lengths(self, step_lengths):
         self.step_lengths = np.array(step_lengths)#np.array([start_step_length, end_step_length])
     
     def set_optimizer(self, opt_name):
-        if opt_name == 'adam' or opt_name == 'sgd':
+        if opt_name in available_opts:
             self.opt_name = opt_name
         else:
-            raise ValueError('Optimizer name must be \'adam\' or \'sgd\'')
+            raise ValueError('Optimizer name must be one of '+','.join(available_opts))
 
     def set_reference_image(self, image, spacing = None):
         self.ref_im = image
@@ -179,12 +163,17 @@ class Register:
     
     def set_report_func(self, func):
         self.report_func = func
-  
+
+    #to implement in subclasses
+    def make_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
+                          flo_resampled, flo_weights, flo_mask_resampled, pyramid_factor):
+        raise NotImplementedError('Must use a subclass of Register, not base class')
+
     def initialize(self, pyramid_images_output_path=None):
         if len(self.pyramid_factors) == 0:
             self.add_pyramid_level(1, 0.0)
         if len(self.initial_transforms) == 0:
-            self.add_initial_transform(AffineTransform(self.dim))
+            self.add_initial_transform(transforms.AffineTransform(self.dim))
         
         ### Preprocessing
 
@@ -217,31 +206,11 @@ class Register:
             else:
                 flo_weights = filters.downsample(self.flo_weights, factor)
 
-            ref_diag = np.sqrt(np.square(np.array(ref_resampled.shape)*self.ref_spacing).sum())
-            flo_diag = np.sqrt(np.square(np.array(flo_resampled.shape)*self.flo_spacing).sum())
+            dist_measure = self.make_dist_measure(ref_resampled, ref_mask_resampled, ref_weights, \
+                                                  flo_resampled, flo_weights, flo_mask_resampled, factor)
 
-            q_ref = QuantizedImage(ref_resampled, self.alpha_levels, ref_weights, self.ref_spacing*factor, remove_zero_weight_pnts = True)
-            q_flo = QuantizedImage(flo_resampled, self.alpha_levels, flo_weights, self.flo_spacing*factor, remove_zero_weight_pnts = True)
+            self.distances.append(dist_measure)
 
-            tf_ref = alpha_amd.AlphaAMD(q_ref, self.alpha_levels, ref_diag, self.ref_spacing*factor, ref_mask_resampled, ref_mask_resampled, interpolator_mode='linear', dt_fun = None, mask_out_edges = True)
-            tf_flo = alpha_amd.AlphaAMD(q_flo, self.alpha_levels, flo_diag, self.flo_spacing*factor, flo_mask_resampled, flo_mask_resampled, interpolator_mode='linear', dt_fun = None, mask_out_edges = True)
-
-            symmetric_measure = True
-            squared_measure = False
-
-            sym_dist = symmetric_amd_distance.SymmetricAMDDistance(symmetric_measure=symmetric_measure, squared_measure=squared_measure)
-
-            sym_dist.set_ref_image_source(q_ref)
-            sym_dist.set_ref_image_target(tf_ref)
-
-            sym_dist.set_flo_image_source(q_flo)
-            sym_dist.set_flo_image_target(tf_flo)
-
-            sym_dist.set_sampling_fraction(self.sampling_fraction)
-
-            sym_dist.initialize()
-
-            self.distances.append(sym_dist)
 
     def run(self):
         pyramid_level_count = len(self.pyramid_factors)
@@ -258,8 +227,16 @@ class Register:
                     opt = AdamOptimizer(self.distances[lvl_it], init_transform.copy())
                 elif self.opt_name == 'sgd':
                     opt = GradientDescentOptimizer(self.distances[lvl_it], init_transform.copy())
+                elif self.opt_name == 'scipy':
+                    opt = SciPyMinimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
+                    #For lower resolutions (earlier levels in the pyramid) use smaller steps to avoid
+                    #translating too far. Also use a larger gradient tolerance as we don't need high 
+                    #accuracy before the final level
+                    minim_opts = {'gtol': self.gradient_magnitude_threshold*np.power(self.pyramid_factors[lvl_it], 2), \
+                                  'eps': 0.0001/self.pyramid_factors[lvl_it]}
+                    opt.set_minimizer_options(minim_opts)
                 else:
-                    raise ValueError('Optimizer name must be \'adam\' or \'sgd\'')
+                    raise ValueError('Optimizer name must be one of '+','.join(available_opts))
 
                 if self.step_lengths.ndim == 1:
                     opt.set_step_length(self.step_lengths[0], self.step_lengths[1])
@@ -289,3 +266,5 @@ class Register:
                     init_transform = opt.get_transform()
 
                 self.value_history[-1].append(opt.get_value_history())
+                print('Pyramid level %d terminating at ['%lvl_it + \
+                                                        ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) +']')
