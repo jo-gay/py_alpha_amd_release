@@ -38,6 +38,11 @@ import filters, transforms
 available_opts = ['adam', 'sgd', 'scipy', 'gridsearch']
 
 class Register:
+    """Base class to operate a registration algorithm using a pyramid scheme.
+    
+    Subclasses override make_dist_measure() for specific registration models. This base class handles
+    setup, transforms, pyramid scheme, optimizer options etc.
+    """
     def __init__(self, dim):
         self.dim = dim
         self.sampling_fraction = 1.0
@@ -119,8 +124,8 @@ class Register:
         self.step_lengths = np.array(step_lengths)#np.array([start_step_length, end_step_length])
     
     def set_optimizer(self, opt_name):
-        if opt_name in available_opts:
-            self.opt_name = opt_name
+        if opt_name.lower() in available_opts:
+            self.opt_name = opt_name.lower()
         else:
             raise ValueError('Optimizer name must be one of '+','.join(available_opts))
 
@@ -159,12 +164,28 @@ class Register:
     def set_report_func(self, func):
         self.report_func = func
 
-    #to implement in subclasses
     def make_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_weights, flo_mask_resampled, pyramid_factor):
+        """Instantiate some distance measure used to evaluate a proposed transform.
+        
+        This is only implemented in subclasses.
+        """
         raise NotImplementedError('Must use a subclass of Register, not base class')
 
     def initialize(self, pyramid_images_output_path=None):
+        """Initialize the registration framework: must be called before run().
+        
+        May be overridden by subclasses. Create and save downsampled versions of the images 
+        for each pyramid level. Set up a distance measure (separate instance for each pyramid
+        level, with the corresponding version of the images).
+        
+        Args:
+            pyramid_images_output_path: slash-terminated string specifying folder in which to
+            save the downsampled images. Default None. If None, images are not saved. Only 
+            applicable for 2D images
+            
+        Other running parameters are set in __init()__
+        """
         if len(self.pyramid_factors) == 0:
             self.add_pyramid_level(1, 0.0)
         if len(self.initial_transforms) == 0:
@@ -208,6 +229,9 @@ class Register:
 
 
     def run(self):
+        """Run the registration algorithm.
+        
+        """
         pyramid_level_count = len(self.pyramid_factors)
         transform_count = len(self.initial_transforms)
 
@@ -231,9 +255,23 @@ class Register:
                                   'eps': 0.02/self.pyramid_factors[lvl_it]}
                     opt.set_minimizer_options(minim_opts)
                 elif self.opt_name == 'gridsearch':
-                    #TODO: adjust the bounds according to the pyramid level.
-                    bounds = [(-1.5, 1.5), (-1, 1), (-1, 1), (-1.5, 1.5), (-10, 10), (-10, 10)]
-                    steps = 11
+                    #Use a reasonable range for each parameter, centered around the best point found in the previous
+                    #pyramid level. TODO: allow this to be modified
+                    #Affine parameter bounds:
+#                    bounds = np.array([(-0.5, 0.5), (-0.25, 0.25), (-0.25, 0.25), (-0.5, 0.5), (-5, 5), (-5, 5)])*self.pyramid_factors[lvl_it]
+                    #Composite parameter bounds:
+                    bounds = np.array([[-0.05, 0.05], [-0.25, 0.25], [-2, 2], [-2, 2]])*self.pyramid_factors[lvl_it]
+                    
+                    if lvl_it > 0:
+                        startpt = init_transform.get_params()
+                    else:
+                        startpt = [1,0,0,0]
+                    bounds = [bounds[i] + startpt[i] for i in range(len(startpt))]
+#                    print(bounds)
+                    
+                    steps = 21 #This to the power of six is the total number of evaluations for affine (4 for composite scale+rigid transform)
+                    print('Pyramid level %d grid search bounds ['%lvl_it + \
+                                                            ';'.join(['%5g to %5g']*len(bounds))%tuple(np.array(bounds).flatten()) +']')
                     opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), bounds, steps)
                 else:
                     raise ValueError('Optimizer name must be one of '+','.join(available_opts))

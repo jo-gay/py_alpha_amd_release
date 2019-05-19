@@ -54,7 +54,7 @@ import time
 import os
 
 # Choice of registration method out of ('alphaAMD', 'MI')
-param_method = 'mi'
+param_method = 'alphaamd'
 # Registration Parameters
 alpha_levels = 7
 # Pixel-size
@@ -69,7 +69,7 @@ param_iterations = 5000
 # The fraction of the points to sample randomly (0.0-1.0)
 param_sampling_fraction = 1.0
 # Number of iterations between each printed output (with current distance/gradient/parameters)
-param_report_freq = 0
+param_report_freq = 1000
 
 # Choice of optimizer from those available ('sgd', 'adam', 'scipy')
 param_optimizer = 'gridsearch'
@@ -150,9 +150,13 @@ def main():
 
     # Create the transform and add it to the registration framework (switch between affine/rigid transforms by commenting/uncommenting)
     # Affine
-    reg.add_initial_transform(transforms.AffineTransform(2), param_scaling=np.array([diag, diag, diag, diag, 1.0, 1.0]))
+#    reg.add_initial_transform(transforms.AffineTransform(2), param_scaling=np.array([diag, diag, diag, diag, 1.0, 1.0]))
     # Rigid 2D
     #reg.add_initial_transform(transforms.Rigid2DTransform(), param_scaling=np.array([diag, 1.0, 1.0]))
+    # Uniform scale, rotate and translate
+    t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                          transforms.Rigid2DTransform()])
+    reg.add_initial_transform(t, param_scaling=np.array([diag, diag, 1.0, 1.0]))
 
     # Set the parameters
     reg.set_iterations(param_iterations)
