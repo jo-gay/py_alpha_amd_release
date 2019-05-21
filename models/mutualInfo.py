@@ -23,9 +23,6 @@
 #
 # Registration framework for Mutual Information
 #
-
-# Import Numpy/Scipy
-import numpy as np
 from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
 
 # Import distances
@@ -41,14 +38,22 @@ class RegisterMI(Register):
         self.mi_fun = mutual_info_score
     
     # set or change the choice of mutual information function. It must take a pair of 1D vectors and return a scalar
+    # if fun is a string, interpret as one of three sklearn.metrics functions
     def set_mutual_info_fun(self, fun):
-        self.mi_fun = fun
+        if fun == 'mi' or fun is None:
+            self.mi_fun = mutual_info_score
+        elif fun == 'normalized' or fun == 'norm':
+            self.mi_fun = normalized_mutual_info_score
+        elif fun == 'adjusted' or fun == 'adj':
+            self.mi_fun = adjusted_mutual_info_score
+        else:
+            self.mi_fun = fun
         
     def make_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_weights, flo_mask_resampled, pyramid_factor):
 
         mi_dist = MIDistance(self.mi_fun)
-        mi_dist.set_ref_image(ref_resampled)
+        mi_dist.set_ref_image(ref_resampled, mask=ref_mask_resampled)
         mi_dist.set_flo_image(flo_resampled)
 
         mi_dist.initialize()

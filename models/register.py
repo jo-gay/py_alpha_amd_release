@@ -25,6 +25,7 @@
 # Import Numpy/Scipy
 import numpy as np
 import scipy.misc
+from matplotlib import pyplot as plt
 
 # Import optimizers
 from optimizers import GradientDescentOptimizer
@@ -222,6 +223,14 @@ class Register:
             else:
                 flo_weights = filters.downsample(self.flo_weights, factor)
 
+            if(False):
+                plt.subplot(121)
+                plt.imshow(np.hstack((ref_resampled, ref_mask_resampled)), cmap='gray')
+                plt.subplot(122)
+                plt.imshow(np.hstack((flo_resampled, flo_mask_resampled)), cmap='gray')
+                plt.show()
+                
+                
             dist_measure = self.make_dist_measure(ref_resampled, ref_mask_resampled, ref_weights, \
                                                   flo_resampled, flo_weights, flo_mask_resampled, factor)
 
@@ -260,18 +269,29 @@ class Register:
                     #Affine parameter bounds:
 #                    bounds = np.array([(-0.5, 0.5), (-0.25, 0.25), (-0.25, 0.25), (-0.5, 0.5), (-5, 5), (-5, 5)])*self.pyramid_factors[lvl_it]
                     #Composite parameter bounds:
-                    bounds = np.array([[-0.05, 0.05], [-0.25, 0.25], [-2, 2], [-2, 2]])*self.pyramid_factors[lvl_it]
+                    bounds = np.array([[-0.025, 0.025], [-0.1, 0.1], [-2, 2], [-2, 2]])*self.pyramid_factors[lvl_it]
                     
                     if lvl_it > 0:
                         startpt = init_transform.get_params()
                     else:
                         startpt = [1,0,0,0]
                     bounds = [bounds[i] + startpt[i] for i in range(len(startpt))]
-#                    print(bounds)
+                    steps = 26 #This to the power of six is the total number of evaluations for affine (4 for composite scale+rigid transform)
                     
-                    steps = 21 #This to the power of six is the total number of evaluations for affine (4 for composite scale+rigid transform)
-                    print('Pyramid level %d grid search bounds ['%lvl_it + \
-                                                            ';'.join(['%5g to %5g']*len(bounds))%tuple(np.array(bounds).flatten()) +']')
+                    if False: #experiment with MI surfaces
+                        if lvl_it < 2: #skip the first two pyramid levels to get the MI surface around the GT for the last level
+                            startpt = [1,0,0,0]
+                            bounds = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
+                            steps = 41 #This to the power of six is the total number of evaluations for affine (4 for composite scale+rigid transform)
+                        else:
+                            #Tightly specified around GT
+                            bounds = np.array([[-0.05, 0.05], [0.25, 0.45], [-2, 2], [-2, 2]])
+                            steps = 21
+                        bounds = [bounds[i] + startpt[i] for i in range(len(startpt))]
+                        
+                        
+#                    print('Pyramid level %d grid search bounds ['%lvl_it + \
+#                                                            ';'.join(['%5g to %5g']*len(bounds))%tuple(np.array(bounds).flatten()) +']')
                     opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), bounds, steps)
                 else:
                     raise ValueError('Optimizer name must be one of '+','.join(available_opts))
@@ -304,5 +324,6 @@ class Register:
                     init_transform = opt.get_transform()
 
                 self.value_history[-1].append(opt.get_value_history())
-                print('Pyramid level %d terminating at ['%lvl_it + \
-                                                        ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) +']')
+#                print('Pyramid level %d terminating at'%lvl_it, \
+#                      '[' + ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) \
+#                      + '] with value %.4f'%opt.get_value())

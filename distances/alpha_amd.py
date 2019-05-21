@@ -143,9 +143,9 @@ class AlphaAMD:
         else:
             self.spacing = np.array(spacing)
         if mask_pre is None:
-            self.mask_pre = np.ones(shape, dtype='boolean')
+            mask_pre = np.ones(shape, dtype='boolean')
         if mask_post is None:
-            self.mask_post = np.ones(shape, dtype='boolean')
+            mask_post = np.ones(shape, dtype='boolean')
         self.mask_pre = mask_pre
         self.mask_post = mask_post
         if interpolator_mode == 'nearest':

@@ -34,7 +34,11 @@ def _default_report_callback(opt):
     param = opt.get_transform().get_params()
     totalIts = np.prod(list(map(len, opt.get_steps())))
     strParam = ','.join(["%5g"]*len(param))%tuple(param)
-    print("#%d (%4.1f%%). --- Value: %10f" % (iteration, 100*iteration/totalIts, value) + ", Param: (%s)"%(strParam))
+    strBest = ','.join(["%5g"]*len(param))%tuple(opt.best_params)
+    print("#%d (%4.1f%%). Value: %8f" % (iteration, 100*iteration/totalIts, value), \
+          "at (%s)."%(strParam), \
+          "Best %8f at (%s)"%(opt.best_value, strBest)
+          )
 
 
 def _appendItems(currlist, suffixlist):
@@ -70,6 +74,7 @@ class GridSearchOptimizer:
         """
         self.measure = measure
         self.transform = transform
+        self.best_params = transform.get_params()
         self.last_value = np.nan
         self.best_value = np.inf
         self.iteration = 0
@@ -223,7 +228,8 @@ class GridSearchOptimizer:
             if self.report_freq > 0 and (self.iteration % self.report_freq == 0) and self.report_func is not None:
                 self.report_func(self)
 
-        
+        # Set the best transform
         self.transform.set_params(self.best_params)
+        self.last_value = self.best_value
         return self.best_value
 

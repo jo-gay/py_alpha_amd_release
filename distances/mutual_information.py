@@ -39,6 +39,7 @@ class MIDistance:
         """
         self.ref_image = None
         self.flo_image = None
+        self.ref_mask = None
         self.mi_fun = fun
 
         self.sampling_fraction = 1.0
@@ -46,7 +47,7 @@ class MIDistance:
         self.best_val = 0
         self.best_trans = None
 
-    def set_ref_image(self, image):
+    def set_ref_image(self, image, mask=None):
         """Set the reference (fixed) image to be used by the distance measure.
         
         Args:
@@ -59,6 +60,13 @@ class MIDistance:
             self.ref_image = np.rint(image*255).astype('uint8')
         else:
             self.ref_image = image
+        
+        #If a new mask is supplied then set it
+        if mask is not None:
+            self.ref_mask = mask
+        #If none is supplied and none already exists, or the one supplied has invalid shape, set to ones.
+        if self.ref_mask is None or self.ref_mask.shape != self.ref_image.shape:
+            self.ref_mask = np.ones(self.ref_image.shape, 'bool')
 
     def set_flo_image(self, image):
         """Set the floating (moving) image to be used by the distance measure.
@@ -127,13 +135,16 @@ class MIDistance:
         # Transform the floating image into the reference image space by applying transformation 'c_trans'
         c_trans.warp(In = self.flo_image, Out = warped_image, mode='spline', bg_value = 0)
         c_trans.warp(In = mask, Out = warped_mask, mode='nearest', bg_value = 0)
-        if len(warped_image[warped_mask>0]) < 0.2*np.prod(self.flo_image.shape): #too small an overlap, skip it.
+        if len(warped_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)]) < 0.4*np.prod(self.flo_image.shape): #too small an overlap, skip it.
             return 0, None
 
         # Cast back to integer values for mutual information comparison
+        warped_image = np.where(warped_image < 0, 0, warped_image)
+        warped_image = np.where(warped_image > 255, 255, warped_image)
         warped_image = np.rint(warped_image).astype('uint8')
 
-        value = self.mi_fun(self.ref_image[warped_mask>0], warped_image[warped_mask>0])
+        value = self.mi_fun(self.ref_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
+                            warped_image[np.logical_and(warped_mask>0, self.ref_mask > 0)])
         
 #        if value > self.best_val:
 #            self.best_val = value
