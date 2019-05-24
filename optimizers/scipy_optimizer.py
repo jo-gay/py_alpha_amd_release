@@ -181,6 +181,6 @@ class SciPyOptimizer:
         self.termination_reason = x_opt.message
         self.value_history = x_opt.fun
         
-#        print(x_opt)
+        print(x_opt)
 
         return x_opt.nit

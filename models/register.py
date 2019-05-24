@@ -155,9 +155,54 @@ class Register:
 
     def set_floating_weights(self, weights):
         self.flo_weights = weights
+        
+    def set_image_data(self, ref_im, flo_im, ref_mask, flo_mask, ref_weights, flo_weights):
+        """Shortcut to set all these parameters in one line."""
+        self.set_reference_image(ref_im)
+        self.set_floating_image(flo_im)
+        self.set_reference_mask(ref_mask)
+        self.set_floating_mask(flo_mask)
+        self.set_reference_weights(ref_weights)
+        self.set_floating_weights(flo_weights)
 
     def set_gradient_magnitude_threshold(self, t):
         self.gradient_magnitude_threshold = t
+
+    def chooseGrid(self, centreTrans, p_lvl, verbose=False):
+        """Choose a reasonable range for each parameter, centered around the transform given.
+        
+        bounds gives the min and max for each parameter, evaluated at steps points linearly spaced
+        between them. 
+        the total number of function evaluations is steps to the power of 6 for affine or steps^4 for 
+        a composite scale+rigid transform. Steps can also be specified as a list of ints, differing for each
+        parameter, in which case the number of evaluations is np.prod(steps)
+        
+        Todo: make size of grid modifiable. Deal with different types of transforms properly.
+        """
+        centre = centreTrans.get_params()
+        #Affine parameter bounds:
+        if len(centre) == 6:
+            bounds = np.array([[-0.1, 0.1], [-0.25, 0.25], [-0.25, 0.25], [-0.1, 0.1], [-5, 5], [-5, 5]])*self.pyramid_factors[p_lvl]
+        #Composite (scale + rigid2d) parameter bounds:
+        elif len(centre) == 4:
+            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-5, 5], [-5, 5]])*self.pyramid_factors[p_lvl]
+            #Bounds set for mutual information surface calculation
+        steps = 16
+        
+        if False: #Enable for MI surfaces
+#            bounds = np.array([[-0.2, 0.2], [-0.25*np.pi, 0.25*np.pi], [0, 0], [0, 0]])
+#            steps = [81,81,1,1]
+            bounds = np.array([[.05, .05], [5*np.pi/180, 5*np.pi/180], [-20, 20], [-20, 20]])
+            steps = [1,1,81,81]
+
+        bounds = [bounds[i] + centre[i] for i in range(len(centre))]
+            
+        if verbose:
+            print('Pyramid level %d grid search bounds ['%p_lvl + \
+                  ';'.join(['%5g to %5g']*len(bounds))%tuple(np.array(bounds).flatten()) +']')
+        
+        return bounds, steps
+
 
     def set_report_freq(self, freq):
         self.report_freq = freq
@@ -191,6 +236,8 @@ class Register:
             self.add_pyramid_level(1, 0.0)
         if len(self.initial_transforms) == 0:
             self.add_initial_transform(transforms.AffineTransform(self.dim))
+        while len(self.step_lengths) < len(self.pyramid_factors):
+            self.step_lengths = np.concatenate((self.step_lengths, np.array([[0,1.0]])))
         
         ### Preprocessing
 
@@ -224,6 +271,7 @@ class Register:
                 flo_weights = filters.downsample(self.flo_weights, factor)
 
             if(False):
+                #Display each image with its mask to check all is ok
                 plt.subplot(121)
                 plt.imshow(np.hstack((ref_resampled, ref_mask_resampled)), cmap='gray')
                 plt.subplot(122)
@@ -256,42 +304,17 @@ class Register:
                 elif self.opt_name == 'sgd':
                     opt = GradientDescentOptimizer(self.distances[lvl_it], init_transform.copy())
                 elif self.opt_name == 'scipy':
-                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
+#                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
                     #For lower resolutions (earlier levels in the pyramid) use smaller steps to avoid
                     #translating too far. Also use a larger gradient tolerance as we don't need high 
                     #accuracy before the final level
-                    minim_opts = {'gtol': self.gradient_magnitude_threshold*np.power(self.pyramid_factors[lvl_it], 2), \
-                                  'eps': 0.02/self.pyramid_factors[lvl_it]}
-                    opt.set_minimizer_options(minim_opts)
+#                    minim_opts = {'gtol': self.gradient_magnitude_threshold*np.power(self.pyramid_factors[lvl_it], 2), \
+#                                  'eps': 0.02/self.pyramid_factors[lvl_it]}
+
+                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='Nelder-Mead')
+#                    opt.set_minimizer_options(minim_opts)
                 elif self.opt_name == 'gridsearch':
-                    #Use a reasonable range for each parameter, centered around the best point found in the previous
-                    #pyramid level. TODO: allow this to be modified
-                    #Affine parameter bounds:
-#                    bounds = np.array([(-0.5, 0.5), (-0.25, 0.25), (-0.25, 0.25), (-0.5, 0.5), (-5, 5), (-5, 5)])*self.pyramid_factors[lvl_it]
-                    #Composite parameter bounds:
-                    bounds = np.array([[-0.025, 0.025], [-0.1, 0.1], [-2, 2], [-2, 2]])*self.pyramid_factors[lvl_it]
-                    
-                    if lvl_it > 0:
-                        startpt = init_transform.get_params()
-                    else:
-                        startpt = [1,0,0,0]
-                    bounds = [bounds[i] + startpt[i] for i in range(len(startpt))]
-                    steps = 26 #This to the power of six is the total number of evaluations for affine (4 for composite scale+rigid transform)
-                    
-                    if False: #experiment with MI surfaces
-                        if lvl_it < 2: #skip the first two pyramid levels to get the MI surface around the GT for the last level
-                            startpt = [1,0,0,0]
-                            bounds = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
-                            steps = 41 #This to the power of six is the total number of evaluations for affine (4 for composite scale+rigid transform)
-                        else:
-                            #Tightly specified around GT
-                            bounds = np.array([[-0.05, 0.05], [0.25, 0.45], [-2, 2], [-2, 2]])
-                            steps = 21
-                        bounds = [bounds[i] + startpt[i] for i in range(len(startpt))]
-                        
-                        
-#                    print('Pyramid level %d grid search bounds ['%lvl_it + \
-#                                                            ';'.join(['%5g to %5g']*len(bounds))%tuple(np.array(bounds).flatten()) +']')
+                    bounds, steps = self.chooseGrid(init_transform, lvl_it, verbose=True)
                     opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), bounds, steps)
                 else:
                     raise ValueError('Optimizer name must be one of '+','.join(available_opts))
@@ -324,6 +347,6 @@ class Register:
                     init_transform = opt.get_transform()
 
                 self.value_history[-1].append(opt.get_value_history())
-#                print('Pyramid level %d terminating at'%lvl_it, \
-#                      '[' + ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) \
-#                      + '] with value %.4f'%opt.get_value())
+                print('Pyramid level %d terminating at'%lvl_it, \
+                      '[' + ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) \
+                      + '] with value %.4f'%opt.get_value())

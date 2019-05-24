@@ -12,7 +12,7 @@ from __future__ import print_function
 import numpy as np
 import matplotlib.pyplot as plt
 #py_alpha_amd imports
-import sys, os, csv
+import sys, os, csv, time
 
 import transforms, filters, models, optimizers
 from PIL import Image
@@ -20,15 +20,25 @@ from PIL import Image
 
 import re #for matching filenames to a required pattern
 
+local_aligned_folder = '../data/aligned_190508/'
+local_mpm_folder = '../data/processed/'
+server_aligned_folder = '/data/jo/MPM Skin Deep Learning Project/aligned_190508/'
+server_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
 
-def getNextPair(verbose=False):
+
+def getNextPair(verbose=False, server=False):
     """Generator function to get next pair of matching images out of a complicated directory structure.
     """
     al_pattern = re.compile("^final\.tif aligned to ([0-9]+)+\.tif$", re.IGNORECASE)
-    aligned_folder = '/data/jo/MPM Skin Deep Learning Project/aligned_190508'
+    if server:
+        aligned_folder = server_aligned_folder
+        mpm_folder = server_mpm_folder
+    else:
+        aligned_folder = local_aligned_folder
+        mpm_folder = local_mpm_folder
+        
     aligned_subdirs = ['dysplastic/', 'malignant/', 'healthy/']
 
-    mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
 
     for sd in aligned_subdirs:
         (_, slidedirs, _) = next(os.walk(aligned_folder+sd)) #get list of subdirs within this one
@@ -105,136 +115,228 @@ def get_transf_error(t1, t2, size):
     return sum([np.sqrt(a*a + b*b) for a,b in dists])
 
 
-"""MAIN CONTROL LOOP"""
-results=[]
-for slide, roi_idx, mpm_path, al_path in getNextPair():
-    
-    ref_im = Image.open(al_path).convert('L')
-    flo_im = Image.open(mpm_path).convert('L')
-    ref_im = np.asarray(ref_im)[200:400,200:400] #Take a smaller region for now
-    flo_im = np.asarray(flo_im)[200:400,200:400]
+def preProcessImageAndCopy(path):
+    im = Image.open(path).convert('L')
+    im = np.asarray(im)#[125:375,125:375] #Take a smaller region for speed
     
     # Keep unmodified copies of original images
-    ref_im_orig = ref_im.copy()
-    flo_im_orig = flo_im.copy()
+    im_orig = im.copy()
     
     # Normalize
-    ref_im = filters.normalize(ref_im, 0.0, None)
-    flo_im = filters.normalize(flo_im, 0.0, None)
-
-    # Choose a transform at random
-    rndTrans = getRandomTransform(5,1.05,5)
-
-    # Apply the transform to the reference image
-    transformed_ref_im = np.zeros(np.rint(np.array(ref_im.shape)*1.5).astype('int'))#increase the canvas size to avoid cutting off too much
-    rndTrans = transforms.make_image_centered_transform(rndTrans, \
-                                             transformed_ref_im, ref_im)
-    rndTrans.warp(In = ref_im, Out = transformed_ref_im, mode='nearest', bg_value = 0)
-    ref_im = transformed_ref_im
+    im = filters.normalize(im, 0.0, None)
     
-#    # Show the images we are working with
-#    print("Aligning images for sample %s, region %s"%(slide, roi_idx) + \
-#          ". A transform of %r has been applied to the reference image"%str(rndTrans.get_params()))
-#    plt.figure(figsize=(12,6))
-#    plt.subplot(121)
-#    plt.imshow(transformed_ref_im, cmap='gray', vmin=0, vmax=1)
-#    plt.title("Reference image")
-#    plt.subplot(122)
-#    plt.imshow(flo_im, cmap='gray', vmin=0, vmax=1)
-#    plt.title("Floating image")
-#    plt.show()
-
-    # Use a grid search to find the position maximising the mutual information
-    reg = models.RegisterMI(2)
-    reg.set_mutual_info_fun('normalized')
+    # Normalizing gives us values between 0 and 1. Now quantize into 4 bits 
+    # to reduce the amount noise in the mutual information calculation and
+    # reduce the time taken to calculate it, too.
+    # Instead, do this later on in the distance measure.  
+#    im = np.rint(im*63).astype('uint8')
     
-    # Generic initialization steps required for every registration model
-    mask1 = np.ones(ref_im_orig.shape, 'bool')
-    ref_mask = np.zeros(ref_im.shape, 'bool')
-    rndTrans.warp(In = mask1, Out = ref_mask, mode='nearest', bg_value = 0)
-    mask2 = np.ones(flo_im.shape, 'bool')
-
-    reg.set_reference_image(ref_im)
-    reg.set_reference_mask(ref_mask)
-
-    reg.set_floating_image(flo_im)
-    reg.set_floating_mask(mask2)
-
-    weights1 = np.ones(ref_im.shape)
-    weights2 = np.ones(flo_im.shape)
-    reg.set_reference_weights(weights1)
-    reg.set_floating_weights(weights2)
-
-    # Setup the Gaussian pyramid resolution levels
-    reg.add_pyramid_level(4, 5.0)
-    reg.add_pyramid_level(2, 3.0)
-    reg.add_pyramid_level(1, 0.0)
-
-    # Learning-rate / Step lengths [[start1, end1], [start2, end2] ...] (for each pyramid level)
-    step_lengths = np.array([[1., 1.], [1., 0.5], [0.5, 0.1]])
-    reg.set_step_lengths(step_lengths)
+    return im, im_orig
     
-    # Estimate an appropriate parameter scaling based on the sizes of the images.
-    diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
-    diag = 2.0/diag
+def centreAndApplyTransform(image, transform, outsize, mode='nearest'):
+        transformed_im = np.zeros(outsize, image.dtype)
+        t = transforms.make_image_centered_transform(transform, \
+                                                 transformed_im, image)
+        t.warp(In = image, Out = transformed_im, mode=mode, bg_value = 0)
+        return transformed_im
     
-    t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
-                                          transforms.Rigid2DTransform()])
-    reg.add_initial_transform(t, param_scaling=np.array([diag, diag, 1.0, 1.0]))
-
-    reg.set_optimizer('gridsearch')
-    reg.set_report_freq(5000)
-
-    # Create output directory
-    directory = os.path.dirname("./tmp")
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-    # Start the pre-processing
-    reg.initialize("./tmp")
+def register_pairs(server=False):
+    results=[]
+    limit = 1
+    for slide, roi_idx, mpm_path, al_path in getNextPair():
+        limit -= 1
+        if limit < 0:
+            break
+        # Open and prepare the images
+        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
+        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
+#        flo_im = flo_im[20:-20, 20:-20] #crop floating image so that it stays within ref
     
-    # Start the registration
-    reg.run()
-
-    (transform, value) = reg.get_output(0)
-
-    ### Warp final image
-    c = transforms.make_image_centered_transform(transform, ref_im, flo_im)
-
-#    # Print out transformation parameters
-#    print('Transformation parameters: %s.' % str(transform.get_params()))
-
-    # Create the output image
-    im_warped = np.zeros(ref_im.shape)
-
-    # Transform the floating image into the reference image space by applying transformation 'c'
-    c.warp(In = flo_im_orig, Out = im_warped, mode='spline', bg_value = 0.0)
-
-#    # Show the images we ended up with
-#    print("Aligned images for sample %s, region %s"%(slide, roi_idx))
-#    plt.figure(figsize=(12,6))
-#    plt.subplot(121)
-#    plt.imshow(ref_im, cmap='gray')
-#    plt.title("Reference image")
-#    plt.subplot(122)
-#    plt.imshow(im_warped, cmap='gray')
-#    plt.title("Floating image")
-#    plt.show()
-#
-#    print("Estimated transform:", c.get_params())
-#    print("True transform:", rndTrans.get_params())
+        # Choose a transform at random
+#        rndTrans = getRandomTransform(maxRot=5,maxScale=1.025,maxTrans=2)
+#        print("Random transform applied: %r"%rndTrans.get_params())
     
-    err = get_transf_error(c, rndTrans, flo_im.shape)
-    
-    resultLine = (slide, roi_idx, *rndTrans.get_params(), *c.get_params(), err)
-    results.append(resultLine)
-
-
-#print(results)
-
-outfile = '/data/jo/MPM Skin Deep Learning Project/aligned_190508/recovered_synthetic_trans_mi.csv'
-with open(outfile, 'w') as f:
-    writer = csv.writer(f, delimiter=',')
-    writer.writerow(["Slide", "Region", "GT_scale", "GT_rot", "GT_x", "GT_y", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error"])
-    writer.writerows(results)
+        # Apply the transform to the reference image, increasing the canvas size to avoid cutting off parts
+#        ref_im = centreAndApplyTransform(ref_im, rndTrans, np.rint(np.array(ref_im.shape)*1.5).astype('int'))
         
+    #    # Show the images we are working with
+    #    print("Aligning images for sample %s, region %s"%(slide, roi_idx) + \
+    #          ". A transform of %r has been applied to the reference image"%str(rndTrans.get_params()))
+    #    plt.figure(figsize=(12,6))
+    #    plt.subplot(121)
+    #    plt.imshow(transformed_ref_im, cmap='gray', vmin=0, vmax=1)
+    #    plt.title("Reference image")
+    #    plt.subplot(122)
+    #    plt.imshow(flo_im, cmap='gray', vmin=0, vmax=1)
+    #    plt.title("Floating image")
+    #    plt.show()
+    
+        # Choose an optimizer to find the position maximising the mutual information
+        reg = models.RegisterMI(2)
+        reg.set_optimizer('gridsearch')
+        reg.set_mutual_info_fun('normalized')
+        
+        # Since we have warped the original reference image, create a mask so that only the relevant
+        # pixels are considered. Use the same warping function as above
+#        ref_mask = np.ones(ref_im_orig.shape, 'bool')
+#        ref_mask = centreAndApplyTransform(ref_mask, rndTrans, np.rint(np.array(ref_im_orig.shape)*1.5).astype('int'))
+        
+        reg.set_image_data(ref_im, \
+                           flo_im, \
+#                           ref_mask=ref_mask, \
+                           ref_mask=np.ones(ref_im.shape, 'bool'), \
+                           flo_mask=np.ones(flo_im.shape, 'bool'), \
+                           ref_weights=None, \
+                           flo_weights=None
+                           )
+    
+        # Set up the Gaussian pyramid resolution levels
+        # There is no evidence so far, that pyramid levels lead the search towards the MI maximum.
+#        reg.add_pyramid_levels(factors=[4, 2, 1], sigmas=[5.0, 3.0, 0.0])
+        # Try with a blurred full-resolution image first (or only)
+#        reg.add_pyramid_levels(factors=[1, 1], sigmas=[5.0, 0.0])
+        reg.add_pyramid_levels(factors=[1,], sigmas=[5.0,])
+    
+        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
+#        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
+#        diag = 2.0/diag
+        
+        t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                              transforms.Rigid2DTransform()])
+        reg.add_initial_transform(t)
+#        reg.add_initial_transform(t, param_scaling=np.array([diag, diag, 1.0, 1.0]))
+    
+        reg.set_report_freq(500)
+    
+        # Create output directory
+        directory = os.path.dirname("./tmp/")
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+    
+        # Start the pre-processing
+        reg.initialize("./tmp/")
+        
+        # Start the registration
+        reg.run()
+    
+        (transform, value) = reg.get_output(0)
+    
+        ### Warp final image
+        c = transforms.make_image_centered_transform(transform, ref_im, flo_im)
+    
+    #    # Print out transformation parameters
+    #    print('Transformation parameters: %s.' % str(transform.get_params()))
+    
+        # Create the output image
+        im_warped = np.zeros(ref_im.shape)
+    
+        # Transform the floating image into the reference image space by applying transformation 'c'
+        c.warp(In = flo_im_orig, Out = im_warped, mode='spline', bg_value = 0.0)
+    
+        # Show the images we ended up with
+        print("Aligned images for sample %s, region %s"%(slide, roi_idx))
+        plt.figure(figsize=(12,6))
+        plt.subplot(121)
+        plt.imshow(ref_im, cmap='gray')
+        plt.title("Reference image")
+        plt.subplot(122)
+        plt.imshow(im_warped, cmap='gray')
+        plt.title("Floating image")
+        plt.show()
+
+#        centred_gt_trans = transforms.make_image_centered_transform(rndTrans, \
+        centred_gt_trans = transforms.make_image_centered_transform(transforms.IdentityTransform(2), \
+                                                 ref_im, flo_im)
+        err = get_transf_error(c, centred_gt_trans, flo_im.shape)
+        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"]")
+#        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"]")
+        print("Error: %5f"%err)
+        
+        resultLine = (slide, roi_idx, *c.get_params(), err)
+#        resultLine = (slide, roi_idx, *rndTrans.get_params(), *c.get_params(), err)
+        results.append(resultLine)
+    
+    
+    #print(results)
+    if server:
+        outfile = server_aligned_folder+'gt_trans_mi_grid.csv'
+    else:
+        outfile = local_aligned_folder+'gt_trans_mi_grid.csv'
+    with open(outfile, 'w') as f:
+        writer = csv.writer(f, delimiter=',')
+        writer.writerow(["Slide", "Region", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error"])
+#        writer.writerow(["Slide", "Region", "GT_scale", "GT_rot", "GT_x", "GT_y", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error"])
+        writer.writerows(results)
+
+
+def create_MI_surfaces(server=False):
+    results=[]
+    limit = 1
+    for slide, roi_idx, mpm_path, al_path in getNextPair():
+        limit -= 1
+        if limit < 0:
+            break
+        # Open and prepare the images
+        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
+        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
+
+        reg = models.RegisterMI(2)
+        reg.set_optimizer('gridsearch')
+        reg.set_mutual_info_fun('normalized')
+        
+        # Since we have warped the original reference image, create a mask so that only the relevant
+        # pixels are considered. Use the same warping function as above
+        
+        reg.set_image_data(ref_im, \
+                           flo_im, \
+                           ref_mask=np.ones(ref_im.shape, 'bool'), \
+                           flo_mask=np.ones(flo_im.shape, 'bool'), \
+                           ref_weights=None, \
+                           flo_weights=None
+                           )
+
+        reg.add_pyramid_levels(factors=[1,], sigmas=[5.0,])
+
+        t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                              transforms.Rigid2DTransform()])
+        reg.add_initial_transform(t)
+        reg.set_report_freq(500)
+    
+        # Create output directory
+        directory = os.path.dirname("./tmp/")
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+    
+        # Start the pre-processing
+        reg.initialize("./tmp/")
+        
+        # Start the registration
+        reg.run()
+        
+        values = - np.array(reg.get_value_history(0, 0))
+
+        if True: #2d surface
+            pts = 81
+            values.resize((pts,pts))
+            
+            plt.figure(figsize=(8,8))
+#            plt.contourf(np.linspace(0.8, 1.2, pts), np.linspace(-0.25*np.pi, 0.25*np.pi, pts), values)
+            plt.contourf(np.linspace(-20, 20, pts), np.linspace(-20, 20, pts), values)
+            plt.colorbar()
+            plt.title("Mutual Information surface at offset scale and rotation\n"\
+                      +"with different translations (smoothed)")
+#            plt.xlabel('Scale')
+#            plt.ylabel('Rotation')
+            plt.show()
+
+
+
+        
+if __name__ == '__main__':
+    start_time = time.time()
+    if len(sys.argv) > 1:
+        server_paths = True
+    register_pairs(server_paths)
+#    create_MI_surfaces(server_paths)
+    end_time = time.time()
+    print("Elapsed time: " + str((end_time-start_time)))

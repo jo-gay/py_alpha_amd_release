@@ -28,7 +28,7 @@ import transforms
 import numpy as np
 
 class MIDistance:
-    def __init__(self, fun):
+    def __init__(self, fun, levels=256):
         """Set up the mutual information distance measure.
         
         Args:
@@ -36,6 +36,9 @@ class MIDistance:
             normalized_mutual_info_score, mutual_info_score}. Could in fact be any function that takes
             lists of (integer) intensity values for two images as flattened arrays and returns a 
             similarity measure
+            levels: number of intensity levels in image, default 256. If a floating point image
+            is provided, will be multiplied by this number minus 1 and rounded to nearest integer
+            for mutual information comparison.
         """
         self.ref_image = None
         self.flo_image = None
@@ -43,6 +46,7 @@ class MIDistance:
         self.mi_fun = fun
 
         self.sampling_fraction = 1.0
+        self.nLevels = levels - 1
         
         self.best_val = 0
         self.best_trans = None
@@ -57,7 +61,7 @@ class MIDistance:
         """
         #For mutual information we need integer types so adjust the input images if necessary
         if image.dtype == np.dtype('float64'):
-            self.ref_image = np.rint(image*255).astype('uint8')
+            self.ref_image = np.rint(image*self.nLevels).astype('uint8')
         else:
             self.ref_image = image
         
@@ -78,7 +82,7 @@ class MIDistance:
         """
         #For mutual information we need integer types so adjust the input images if necessary
         if image.dtype == np.dtype('float64'):
-            self.flo_image = np.rint(image*255).astype('uint8')
+            self.flo_image = np.rint(image*self.nLevels).astype('uint8')
         else:
             self.flo_image = image
 
@@ -140,7 +144,7 @@ class MIDistance:
 
         # Cast back to integer values for mutual information comparison
         warped_image = np.where(warped_image < 0, 0, warped_image)
-        warped_image = np.where(warped_image > 255, 255, warped_image)
+        warped_image = np.where(warped_image > self.nLevels, self.nLevels, warped_image)
         warped_image = np.rint(warped_image).astype('uint8')
 
         value = self.mi_fun(self.ref_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \

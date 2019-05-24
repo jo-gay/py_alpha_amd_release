@@ -52,7 +52,7 @@ class RegisterMI(Register):
     def make_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_weights, flo_mask_resampled, pyramid_factor):
 
-        mi_dist = MIDistance(self.mi_fun)
+        mi_dist = MIDistance(self.mi_fun, levels=256) # reducing levels to 32 improves running time by less than 20%
         mi_dist.set_ref_image(ref_resampled, mask=ref_mask_resampled)
         mi_dist.set_flo_image(flo_resampled)
 
