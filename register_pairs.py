@@ -24,7 +24,8 @@ local_aligned_folder = '../data/aligned_190508/'
 local_mpm_folder = '../data/processed/'
 server_aligned_folder = '/data/jo/MPM Skin Deep Learning Project/aligned_190508/'
 server_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
-
+local_sr_folder = '../data/struct_reprs/pca/'
+server_sr_folder = '/data/jo/MPM Skin Deep Learning Project/struct_reprs/pca/'
 
 def getNextPair(verbose=False, server=False):
     """Generator function to get next pair of matching images out of a complicated directory structure.
@@ -70,7 +71,26 @@ def getNextPair(verbose=False, server=False):
                         continue
                         
                     yield slide, roi_idx, mpm_path, al_path
-                    
+
+def getNextSRPair(folder, verbose=False):
+    """Generator function to get next pair of images from structural representations folder.
+    
+    Look through all the files in the given folder. For each one where the filename matches 
+    the pattern, look for one that has the same name except with bf. If found, return the 
+    paths and also the sample and region ids
+    """
+    pattern = re.compile("^([0-9]+)_([0-9]+)_mpm_.*$")
+    (_, _, files) = next(os.walk(folder))
+    for f in files:
+        m = pattern.match(f)
+        if not m: #Not an MPM file or at least, not one matching our pattern
+            continue
+        bf_path = folder + f.replace('mpm', 'bf')
+        if os.path.isfile(bf_path):
+            yield m.group(1), m.group(2), folder+f, bf_path
+        else:
+            if verbose:
+                print('MPM file %s: matching bf %s not found'%(f, bf_path))
                     
 def getRandomTransform(maxRot=10, maxScale=1.15, maxTrans=8):
     """
@@ -142,8 +162,12 @@ def centreAndApplyTransform(image, transform, outsize, mode='nearest'):
     
 def register_pairs(server=False):
     results=[]
-    limit = 1
-    for slide, roi_idx, mpm_path, al_path in getNextPair():
+    limit = 100
+    folder = local_sr_folder
+    if server:
+        folder = server_sr_folder
+
+    for slide, roi_idx, mpm_path, al_path in getNextSRPair(folder):
         limit -= 1
         if limit < 0:
             break
@@ -159,22 +183,22 @@ def register_pairs(server=False):
         # Apply the transform to the reference image, increasing the canvas size to avoid cutting off parts
 #        ref_im = centreAndApplyTransform(ref_im, rndTrans, np.rint(np.array(ref_im.shape)*1.5).astype('int'))
         
-    #    # Show the images we are working with
-    #    print("Aligning images for sample %s, region %s"%(slide, roi_idx) + \
-    #          ". A transform of %r has been applied to the reference image"%str(rndTrans.get_params()))
-    #    plt.figure(figsize=(12,6))
-    #    plt.subplot(121)
-    #    plt.imshow(transformed_ref_im, cmap='gray', vmin=0, vmax=1)
-    #    plt.title("Reference image")
-    #    plt.subplot(122)
-    #    plt.imshow(flo_im, cmap='gray', vmin=0, vmax=1)
-    #    plt.title("Floating image")
-    #    plt.show()
+        # Show the images we are working with
+        print("Aligning images for sample %s, region %s"%(slide, roi_idx) \
+#              + ". A transform of %r has been applied to the reference image"%str(rndTrans.get_params()))
+               + " from folder %s"%folder)
+        plt.figure(figsize=(12,6))
+        plt.subplot(121)
+        plt.imshow(ref_im, cmap='gray', vmin=0, vmax=1)
+        plt.title("Reference image")
+        plt.subplot(122)
+        plt.imshow(flo_im, cmap='gray', vmin=0, vmax=1)
+        plt.title("Floating image")
+        plt.show()
     
         # Choose an optimizer to find the position maximising the mutual information
-        reg = models.RegisterMI(2)
-        reg.set_optimizer('gridsearch')
-        reg.set_mutual_info_fun('normalized')
+        reg = models.RegisterAlphaAMD(2)
+        reg.set_optimizer('adam')
         
         # Since we have warped the original reference image, create a mask so that only the relevant
         # pixels are considered. Use the same warping function as above
@@ -189,23 +213,32 @@ def register_pairs(server=False):
                            ref_weights=None, \
                            flo_weights=None
                            )
-    
-        # Set up the Gaussian pyramid resolution levels
-        # There is no evidence so far, that pyramid levels lead the search towards the MI maximum.
-#        reg.add_pyramid_levels(factors=[4, 2, 1], sigmas=[5.0, 3.0, 0.0])
-        # Try with a blurred full-resolution image first (or only)
-#        reg.add_pyramid_levels(factors=[1, 1], sigmas=[5.0, 0.0])
-        reg.add_pyramid_levels(factors=[1,], sigmas=[5.0,])
-    
-        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
-#        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
-#        diag = 2.0/diag
         
         t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
                                               transforms.Rigid2DTransform()])
-        reg.add_initial_transform(t)
-#        reg.add_initial_transform(t, param_scaling=np.array([diag, diag, 1.0, 1.0]))
-    
+        #MI
+#        reg.set_mutual_info_fun('normalized')
+#        reg.add_initial_transform(t)
+#        # There is no evidence so far, that pyramid levels lead the search towards the MI maximum.
+#        reg.add_pyramid_levels(factors=[1, ], sigmas=[0.0,])
+#        # Try with a blurred full-resolution image first (or only)
+#        reg.add_pyramid_levels(factors=[1,1], sigmas=[5.0,5.0])
+
+        #AlphaAMD
+        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
+        reg.set_sampling_fraction(0.1)
+        reg.set_iterations(1000)
+        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
+        diag = 2.0/diag
+        reg.add_initial_transform(t, param_scaling=np.array([diag, diag, 1.0, 1.0]))
+        # Learning-rate / Step lengths [[start1, end1], [start2, end2] ...] (for each pyramid level)
+        step_lengths = np.array([[1., 1.], [1., 0.5], [0.5, 0.1]])
+        reg.set_step_lengths(step_lengths)
+        reg.set_gradient_magnitude_threshold(1e-6)
+        reg.set_alpha_levels(7)
+        reg.add_pyramid_levels(factors=[4, 2, 1], sigmas=[5.0, 3.0, 0.0])
+
+
         reg.set_report_freq(500)
     
         # Create output directory
@@ -252,19 +285,19 @@ def register_pairs(server=False):
 #        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"]")
         print("Error: %5f"%err)
         
-        resultLine = (slide, roi_idx, *c.get_params(), err)
+        resultLine = (slide, roi_idx, *c.get_params(), err, -value)
 #        resultLine = (slide, roi_idx, *rndTrans.get_params(), *c.get_params(), err)
         results.append(resultLine)
     
     
     #print(results)
     if server:
-        outfile = server_aligned_folder+'gt_trans_mi_grid.csv'
+        outfile = server_aligned_folder+'PCANetSR_alphaAMD_adam.csv'
     else:
-        outfile = local_aligned_folder+'gt_trans_mi_grid.csv'
+        outfile = local_aligned_folder+'PCANetSR_alphaAMD_adam.csv'
     with open(outfile, 'w') as f:
         writer = csv.writer(f, delimiter=',')
-        writer.writerow(["Slide", "Region", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error"])
+        writer.writerow(["Slide", "Region", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error", "Value"])
 #        writer.writerow(["Slide", "Region", "GT_scale", "GT_rot", "GT_x", "GT_y", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error"])
         writer.writerows(results)
 
@@ -334,6 +367,7 @@ def create_MI_surfaces(server=False):
         
 if __name__ == '__main__':
     start_time = time.time()
+    server_paths = False
     if len(sys.argv) > 1:
         server_paths = True
     register_pairs(server_paths)

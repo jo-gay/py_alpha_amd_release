@@ -26,7 +26,8 @@
 import numpy as np
 #import scipy as sp
 from PIL import Image
-
+from matplotlib import pyplot as plt
+from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
 
 # Import transforms
 #from transforms import CompositeTransform
@@ -54,7 +55,7 @@ import time
 import os
 
 # Choice of registration method out of ('alphaAMD', 'MI')
-param_method = 'alphaamd'
+param_method = 'alphaAMD'
 # Registration Parameters
 alpha_levels = 7
 # Pixel-size
@@ -72,7 +73,7 @@ param_sampling_fraction = 1.0
 param_report_freq = 1000
 
 # Choice of optimizer from those available ('sgd', 'adam', 'scipy')
-param_optimizer = 'gridsearch'
+param_optimizer = 'adam'
 
 # Where should output files be saved
 param_outdir = './test_images/output/'
@@ -192,9 +193,67 @@ def main():
 
     # Transform the floating image into the reference image space by applying transformation 'c'
     c.warp(In = flo_im_orig, Out = ref_im_warped, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
+    # Cast back to integer values for mutual information comparison
+    ref_im_warped = np.rint(ref_im_warped).astype('uint8')
+    mask = np.ones(flo_im.shape)
+    warped_mask = np.zeros(ref_im.shape)
+    c.warp(In = mask, Out = warped_mask, in_spacing=spacing, out_spacing=spacing, mode='nearest', bg_value = 0.0)
+    value1 = mutual_info_score(ref_im[warped_mask>0], ref_im_warped[warped_mask>0])
+    print("Mutual info at estimated transform:", value1)
 
+#    plt.figure()
+#    plt.subplot(121)
+#    plt.imshow(ref_im_warped, vmin=0, vmax=255, cmap='gray')
+#    plt.title("Registered image")
+#    plt.subplot(122)
+#    plt.imshow(warped_mask, vmin=0, vmax=1, cmap='gray')
+#    plt.show()
     # Save the registered image
     Image.fromarray(ref_im_warped).convert('RGB').save(param_outdir+'registered.png')
+
+
+    ### Compare with ground truth
+    scaling_trans = transforms.ScalingTransform(2, uniform=True)
+    scaling_trans.set_params([1,])
+    rigid_trans = transforms.Rigid2DTransform()
+    rigid_trans.set_params([0.35, 0.5, 0.5])
+    gt_transform = transforms.CompositeTransform(2, [scaling_trans, rigid_trans])
+
+    c2 = transforms.make_image_centered_transform(gt_transform, ref_im, flo_im, spacing, spacing)
+
+    # Print out ground truth transformation parameters
+    print('Ground Truth transformation parameters: %s.' % str(gt_transform.get_params()))
+
+    # Create the output image
+    warped_image = np.zeros(ref_im.shape)
+    mask = np.ones(flo_im_orig.shape)
+    warped_mask = np.zeros(ref_im.shape)
+
+    # Transform the floating image into the reference image space by applying transformation defined above
+    c2.warp(In = flo_im_orig, Out = warped_image, mode='spline', bg_value = 0)
+    # Apply the same transform to the mask to determine which pixels are within the original image
+    c2.warp(In = mask, Out = warped_mask, mode='nearest', bg_value = 0)
+
+    # Cast back to integer values for mutual information comparison
+    warped_image = np.rint(warped_image).astype('uint8')
+
+    value2 = mutual_info_score(ref_im[warped_mask>0], warped_image[warped_mask>0])
+    print("Mutual info at ground truth:", value2)
+
+    plt.figure()
+    plt.subplot(131)
+    plt.imshow(ref_im_warped, vmin=0, vmax=255, cmap='gray')
+    plt.title("Registered image")
+    plt.subplot(132)
+    plt.imshow(warped_image, vmin=0, vmax=255, cmap='gray')
+    plt.title("Ground truth")
+    plt.subplot(133)
+    plt.imshow(abs(ref_im_warped.astype(float) - warped_image.astype(float)), vmin=0, vmax=255, cmap='gray')
+    plt.title("Difference")
+    plt.show()
+
+
+
 
     # Compute the absolute difference image between the reference and registered images
     D1 = np.abs(ref_im_orig-ref_im_warped)

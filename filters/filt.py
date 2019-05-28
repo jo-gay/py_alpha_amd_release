@@ -24,14 +24,13 @@
 
 # Import Numpy/Scipy
 import numpy as np
-import scipy as sp
-import scipy.misc
+import scipy.ndimage as ndimage
 
 def gaussian_filter(image, sigma):
     if sigma <= 0.0:
         return image
     else:
-        return scipy.ndimage.filters.gaussian_filter(image, sigma)
+        return ndimage.gaussian_filter(image, sigma)
 
 def downsample(image, n):
     n = np.int(n) # make sure we have an integer

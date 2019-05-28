@@ -185,7 +185,8 @@ class Register:
             bounds = np.array([[-0.1, 0.1], [-0.25, 0.25], [-0.25, 0.25], [-0.1, 0.1], [-5, 5], [-5, 5]])*self.pyramid_factors[p_lvl]
         #Composite (scale + rigid2d) parameter bounds:
         elif len(centre) == 4:
-            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-5, 5], [-5, 5]])*self.pyramid_factors[p_lvl]
+#            bounds = np.array([[-0.1, 0.1], [-10*np.pi/180, 10*np.pi/180], [-10, 10], [-10, 10]])*self.pyramid_factors[p_lvl]
+            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-5, 5], [-5, 5]])*(2-p_lvl)
             #Bounds set for mutual information surface calculation
         steps = 16
         
