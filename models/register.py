@@ -101,6 +101,9 @@ class Register:
     def get_output(self, index):
         return self.output_transforms[index], self.values[index]
 
+    def get_outputs(self):
+        return self.output_transforms, self.values
+
     def get_value_history(self, index, level):
         return self.value_history[index][level]
 
@@ -185,10 +188,10 @@ class Register:
             bounds = np.array([[-0.1, 0.1], [-0.25, 0.25], [-0.25, 0.25], [-0.1, 0.1], [-5, 5], [-5, 5]])*self.pyramid_factors[p_lvl]
         #Composite (scale + rigid2d) parameter bounds:
         elif len(centre) == 4:
-#            bounds = np.array([[-0.1, 0.1], [-10*np.pi/180, 10*np.pi/180], [-10, 10], [-10, 10]])*self.pyramid_factors[p_lvl]
-            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-5, 5], [-5, 5]])*(2-p_lvl)
+            bounds = np.array([[-0.1, 0.1], [-10*np.pi/180, 10*np.pi/180], [-20, 20], [-20, 20]])#*self.pyramid_factors[p_lvl]
+#            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-5, 5], [-5, 5]])#*(2-p_lvl)
             #Bounds set for mutual information surface calculation
-        steps = 16
+        steps = 11
         
         if False: #Enable for MI surfaces
 #            bounds = np.array([[-0.2, 0.2], [-0.25*np.pi, 0.25*np.pi], [0, 0], [0, 0]])
@@ -305,15 +308,18 @@ class Register:
                 elif self.opt_name == 'sgd':
                     opt = GradientDescentOptimizer(self.distances[lvl_it], init_transform.copy())
                 elif self.opt_name == 'scipy':
-#                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
+                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
+                    minim_opts = {'gtol': 1e-9, \
+                                  'eps': 0.02}
                     #For lower resolutions (earlier levels in the pyramid) use smaller steps to avoid
                     #translating too far. Also use a larger gradient tolerance as we don't need high 
                     #accuracy before the final level
 #                    minim_opts = {'gtol': self.gradient_magnitude_threshold*np.power(self.pyramid_factors[lvl_it], 2), \
 #                                  'eps': 0.02/self.pyramid_factors[lvl_it]}
-
-                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='Nelder-Mead')
-#                    opt.set_minimizer_options(minim_opts)
+#                    minim_opts = {'xatol': 1e-1, \
+#                                  'ftol': 1e-6}
+#                    opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='Nelder-Mead')
+                    opt.set_minimizer_options(minim_opts)
                 elif self.opt_name == 'gridsearch':
                     bounds, steps = self.chooseGrid(init_transform, lvl_it, verbose=True)
                     opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), bounds, steps)

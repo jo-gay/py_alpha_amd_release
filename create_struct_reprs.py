@@ -31,7 +31,7 @@ server_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
 local_output_folder = '../data/struct_reprs/pca/'
 server_output_folder = '/data/jo/MPM Skin Deep Learning Project/struct_reprs/pca/'
 
-def load_brightfield_images(verbose=False, server=False, blur=None, limit=None):
+def load_brightfield_images(verbose=False, server=False, blur=3.0, limit=None):
     images = []
     count=0
     pattern = re.compile("^final\.tif aligned to ([0-9]+)+\.tif$", re.IGNORECASE)
@@ -64,7 +64,7 @@ def load_brightfield_images(verbose=False, server=False, blur=None, limit=None):
 
     return np.asarray(images)
 
-def load_MPM_images(verbose=False, server=False, blur=None, limit=None):
+def load_MPM_images(verbose=False, server=False, blur=3.0, limit=None):
     """Collate MPM images from a hard-coded directory structure into a single ndarray
     """
     images = []
@@ -83,10 +83,6 @@ def load_MPM_images(verbose=False, server=False, blur=None, limit=None):
             m = pattern.match(f)
             if m:
                 mpm_path = mpm_folder + f
-    #            if images is None:
-    #                images = preProcessImage(mpm_path)
-    #                images.resize((1, *images.shape))
-    #            else:
                 images.append(preProcessImage(mpm_path, blur=blur))
                 count += 1
     if verbose:
@@ -139,16 +135,17 @@ def getNextPair(verbose=False, server=False):
                         
                     yield slide, roi_idx, mpm_path, al_path
                     
-def preProcessImage(path, blur=None):
+def preProcessImage(path, blur=None, norm=True):
     im = Image.open(path).convert('L')
     im = np.asarray(im)/255. #images are uint8 - convert to float
-    
-    # Normalize
-#    im = filters.normalize(im, 0.0, None)
     
     # Apply gaussian blur with sigma given by 'blur' parameter
     if blur:
         im = filters.gaussian_filter(im, blur)
+    
+    # Normalize
+    if norm:
+        im = filters.normalize(im, 0.0, None)
     
     return im
 
@@ -166,28 +163,36 @@ def create_SR_pairs(mpm_net, bf_net, server=False):
         os.makedirs(directory)
 
     for slide, roi_idx, mpm_path, bf_path in getNextPair(verbose=False, server=server):
-        mpmPSR = mpm_net.create_PSR(preProcessImage(mpm_path))
-        bfPSR = bf_net.create_PSR(preProcessImage(bf_path))
+        mpm = preProcessImage(mpm_path, blur=3.0, norm=True)
+        mpmPSR = mpm_net.create_PSR(mpm)
+        bf = preProcessImage(bf_path, blur=3.0, norm=True)
+        bfPSR = bf_net.create_PSR(bf)
         # Show the images we ended up with
-        print("Structural representations for sample %s, region %s"%(slide, roi_idx))
-        plt.figure(figsize=(12,6))
-        plt.subplot(121)
-        plt.imshow(bfPSR[0], cmap='gray')
+#        print("Structural representations for sample %s, region %s"%(slide, roi_idx))
+        plt.figure(figsize=(12,12))
+        plt.subplot(221)
+        plt.imshow(bf, cmap='gray')
+        plt.colorbar()
         plt.title("Brightfield image")
-        plt.subplot(122)
-        plt.imshow(mpmPSR[0], cmap='gray')
+        plt.subplot(222)
+        plt.imshow(mpm, cmap='gray')
+        plt.colorbar()
         plt.title("MPM image")
+        plt.subplot(223)
+        plt.imshow(bfPSR[0], cmap='gray')
+        plt.colorbar()
+        plt.title("SR of brightfield image")
+        plt.subplot(224)
+        plt.imshow(mpmPSR[0], cmap='gray')
+        plt.colorbar()
+        plt.title("SR of MPM image")
         plt.show()
         
         #Save the PSRs to file
         mpm = np.rint(mpmPSR[0]*255.).astype('uint8')
         bf = np.rint(bfPSR[0]*255.).astype('uint8')
-#        mpm_norm = np.rint(filters.normalize(mpmPSR[0])*255.).astype('uint8')
-#        bf_norm = np.rint(filters.normalize(bfPSR[0])*255.).astype('uint8')
-        Image.fromarray(mpm).save(outpath+'%s_%s_mpm_blur_psr.tif'%(slide,roi_idx))
-        Image.fromarray(bf).save(outpath+'%s_%s_bf_blur_psr.tif'%(slide,roi_idx))
-#        Image.fromarray(mpm_norm).save(outpath+'%s_%s_mpm_psr_norm.tif'%(slide,roi_idx))
-#        Image.fromarray(bf_norm).save(outpath+'%s_%s_bf_psr_norm.tif'%(slide,roi_idx))
+        Image.fromarray(mpm).save(outpath+'%s_%s_mpm_psr.tif'%(slide,roi_idx))
+        Image.fromarray(bf).save(outpath+'%s_%s_bf_psr.tif'%(slide,roi_idx))
 
 
 def train_PCANet(images, MPM=False, server=False):
@@ -200,14 +205,14 @@ def train_PCANet(images, MPM=False, server=False):
     )
     
     if MPM:
-        pcanet.c1 = 0.008 #orig 0.8
-        pcanet.c2 = 0.006 #orig 0.6
+        pcanet.c1 = 0.02 #orig 0.8, this is better for MPM
+        pcanet.c2 = 0.005 #orig 0.6, this is better for MPM
 
     pcanet.validate_structure()
     pcanet.fit(images)
     
-    if True:
-        print('First five structural represenations:')
+    if False:
+        print('Showing first five structural represenations:')
         for i in range(5):
             imagePSR = pcanet.create_PSR(images[i])
     
@@ -225,8 +230,8 @@ if __name__ == '__main__':
 
     train=True    
     if train:
-        mpm_net = train_PCANet(load_MPM_images(verbose=True, server=use_server_paths, blur=5.0, limit=None), MPM=True)
-        bf_net = train_PCANet(load_brightfield_images(verbose=True, server=use_server_paths, blur=5.0, limit=None))
+        mpm_net = train_PCANet(load_MPM_images(verbose=True, server=use_server_paths, blur=3.0, limit=25), MPM=True)
+        bf_net = train_PCANet(load_brightfield_images(verbose=True, server=use_server_paths, blur=3.0, limit=25))
         filepath = local_output_folder
         if use_server_paths:
             filepath = server_output_folder
@@ -237,4 +242,4 @@ if __name__ == '__main__':
     
     create_SR_pairs(mpm_net, bf_net, server=use_server_paths)
     end_time = time.time()
-    print("Elapsed time: " + str((end_time-start_time)))
+    print("Elapsed time: %.1f s"%(end_time-start_time,))
