@@ -21,12 +21,14 @@ from PIL import Image
 import re #for matching filenames to a required pattern
 
 sys.path.append('../PCANet')
-from pcanet_based import PCANetBasedSR as net
+from pcanet_based import PCANetBasedSR as pcanet
 
 local_bf_folder = '../data/aligned_190508/'
 local_mpm_folder = '../data/processed/'
+local_tpef_folder = '../data/unprocessed/'
 server_bf_folder = '/data/jo/MPM Skin Deep Learning Project/aligned_190508/'
 server_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
+server_tpef_folder = '/data/jo/MPM Skin Deep Learning Project/'
 
 local_output_folder = '../data/struct_reprs/pca/'
 server_output_folder = '/data/jo/MPM Skin Deep Learning Project/struct_reprs/pca/'
@@ -63,6 +65,83 @@ def load_brightfield_images(verbose=False, server=False, blur=3.0, limit=None):
         print('Loaded %d brightfield images'%len(images))
 
     return np.asarray(images)
+
+def load_SHG_images(verbose=False, server=False, blur=3.0, limit=None):
+    """Collate SHG images from a hard-coded directory structure into a single ndarray
+    """
+    images = []
+    image_ids = []
+    count=0
+    pattern = re.compile("^([0-9]+)-shg.tif$", re.IGNORECASE)
+    if server:
+        shg_folder = server_tpef_folder
+    else:
+        shg_folder = local_tpef_folder
+
+    subdirs = ['Dysplastic/', 'Malignant/', 'Healthy/']
+    
+    for sd in subdirs:
+        (_, slidedirs, _) = next(os.walk(shg_folder+sd)) #get list of subdirs within this one
+
+        for slide in slidedirs:
+            deepfolder = shg_folder+sd+slide+'/med/'
+            (_, _, files) = next(os.walk(deepfolder)) #get list of files
+            for f in files:
+                if limit and count>=limit:
+                    break
+                else:
+                    m = pattern.match(f)
+                    if m:
+                        shg_path = deepfolder + f
+                        images.append(preProcessImage(shg_path, blur=blur, norm=True))
+                        image_ids.append((slide, m.groups(1)[0]))
+                        count += 1
+    if verbose:
+        print('Loaded %d SHG images'%len(images))
+
+    return np.asarray(images), image_ids
+
+def load_TPEF_images(verbose=False, server=False, blur=3.0, limit=None):
+    """Collate TPEF images from a hard-coded directory structure into a single ndarray
+    """
+    images = []
+    image_ids = []
+    count=0
+    pattern = re.compile("^([0-9]+)-tpef1.tif$", re.IGNORECASE)
+    if server:
+        tpef_folder = server_tpef_folder
+    else:
+        tpef_folder = local_tpef_folder
+
+    subdirs = ['Dysplastic/', 'Malignant/', 'Healthy/']
+    
+    for sd in subdirs:
+        (_, slidedirs, _) = next(os.walk(tpef_folder+sd)) #get list of subdirs within this one
+
+        for slide in slidedirs:
+            deepfolder = tpef_folder+sd+slide+'/med/'
+            (_, _, files) = next(os.walk(deepfolder)) #get list of files
+            for f in files:
+                if limit and count>=limit:
+                    break
+                else:
+                    m = pattern.match(f)
+                    if m:
+                        tpef1_path = deepfolder + f
+                        tpef2_path = deepfolder + f.replace('tpef1', 'tpef2')
+                        if os.path.isfile(tpef2_path):
+                            tpef1_im = preProcessImage(tpef1_path, blur=None, norm=False)
+                            tpef2_im = preProcessImage(tpef2_path, blur=None, norm=False)
+                            tpef_mean = (tpef1_im + tpef2_im)/2
+                            tpef_mean = filters.gaussian_filter(tpef_mean, blur)
+                            tpef_mean = filters.normalize(tpef_mean, 0.0, None)
+                            images.append(tpef_mean)
+                            image_ids.append((slide, m.groups(1)[0]))
+                            count += 1
+    if verbose:
+        print('Loaded %d TPEF images'%len(images))
+
+    return np.asarray(images), image_ids
 
 def load_MPM_images(verbose=False, server=False, blur=3.0, limit=None):
     """Collate MPM images from a hard-coded directory structure into a single ndarray
@@ -194,32 +273,55 @@ def create_SR_pairs(mpm_net, bf_net, server=False):
         Image.fromarray(mpm).save(outpath+'%s_%s_mpm_psr.tif'%(slide,roi_idx))
         Image.fromarray(bf).save(outpath+'%s_%s_bf_psr.tif'%(slide,roi_idx))
 
+def create_save_SR(net, image, outfile):
+    """Create a PCANet-based structural representation of a given image using
+    a trained network provided and save to outfile.
+    
+    Assumes image has already been preprocessed (if required).
+    Outfile will be overwritten if it exists
+    """
+    psr = net.create_PSR(image)
+    psr_ndint = np.rint(psr[0]*255.).astype('uint8')
+    Image.fromarray(psr_ndint).save(outfile)
+    return psr[0]
 
-def train_PCANet(images, MPM=False, server=False):
+def create_all_SRs(net, images, image_ids, folder, prefix=''):
+    """Create a PCANet-based structural representation of a set of (processed) images using
+    a trained network provided, and save each to a file based on the image ids provided.
+    """
+    for image, (slide, region) in zip(images, image_ids):
+        #outimage = 
+        create_save_SR(net, image, folder+f'{prefix}{slide}_{region}.tif')
+#        plt.imshow(outimage, cmap='gray', vmin=0, vmax=1)
+#        plt.show()
+        
+
+def train_PCANet(images, c1=None, c2=None, server=False):
     print('Training PCANet-based structural representation model')
-    pcanet = net(
+    net = pcanet(
         image_shape=images[0].shape,
         filter_shape_l1=3, step_shape_l1=1, n_l1_output=8,
         filter_shape_l2=3, step_shape_l2=1, n_l2_output=8,
         filter_shape_pooling=2, step_shape_pooling=2
     )
     
-    if MPM:
-        pcanet.c1 = 0.02 #orig 0.8, this is better for MPM
-        pcanet.c2 = 0.005 #orig 0.6, this is better for MPM
+    if c1:
+        net.c1 = c1 #orig 0.8
+    if c2:
+        net.c2 = c2 #orig 0.6
 
-    pcanet.validate_structure()
-    pcanet.fit(images)
+    net.validate_structure()
+    net.fit(images)
     
     if False:
         print('Showing first five structural represenations:')
         for i in range(5):
-            imagePSR = pcanet.create_PSR(images[i])
+            imagePSR = net.create_PSR(images[i])
     
             plt.imshow(imagePSR[0], cmap='gray')
             plt.show()
         
-    return pcanet
+    return net
 
         
 if __name__ == '__main__':
@@ -227,19 +329,36 @@ if __name__ == '__main__':
     use_server_paths = False
     if len(sys.argv) > 1:
         use_server_paths = True
+    filepath = local_output_folder
+    if use_server_paths:
+        filepath = server_output_folder
 
-    train=True    
+    shg_images, shg_image_ids = load_SHG_images(verbose=True, server=use_server_paths, blur=3.0)
+    tpef_images, tpef_image_ids = load_TPEF_images(verbose=True, server=use_server_paths, blur=3.0)
+
+    train=True
     if train:
-        mpm_net = train_PCANet(load_MPM_images(verbose=True, server=use_server_paths, blur=3.0, limit=25), MPM=True)
-        bf_net = train_PCANet(load_brightfield_images(verbose=True, server=use_server_paths, blur=3.0, limit=25))
-        filepath = local_output_folder
-        if use_server_paths:
-            filepath = server_output_folder
-        with open(filepath+'mpm_net', "wb") as f:
-            pickle.dump(mpm_net, f)
-        with open(filepath+'bf_net', "wb") as f:
-            pickle.dump(bf_net, f)
+        # Take a random subsample of all the images for training the network. Although the same images
+        # are included later, it is not supervised learning so shouldn't matter
+        limit=100
+        shg_training_idxs = np.random.choice(len(shg_images), limit, replace=False)
+        tpef_training_idxs = np.random.choice(len(tpef_images), limit, replace=False)
+#        mpm_net = train_PCANet(load_MPM_images(verbose=True, server=use_server_paths, blur=3.0, limit=25), c1=0.02, c2=0.005)
+#        bf_net = train_PCANet(load_brightfield_images(verbose=True, server=use_server_paths, blur=3.0, limit=25))
+        shg_net = train_PCANet(shg_images[shg_training_idxs], c1=0.2, c2=0.2)
+        tpef_net = train_PCANet(tpef_images[tpef_training_idxs], c1=0.1, c2=0.1)
+        with open(filepath+'shg_net', "wb") as f:
+            pickle.dump(shg_net, f)
+        with open(filepath+'tpef_net', "wb") as f:
+            pickle.dump(tpef_net, f)
+    else:
+        with open(filepath+'shg_net', 'rb') as f:
+            shg_net = pickle.load(f)
+        with open(filepath+'tpef_net', 'rb') as f:
+            tpef_net = pickle.load(f)
     
-    create_SR_pairs(mpm_net, bf_net, server=use_server_paths)
+#    create_SR_pairs(shg_net, tpef_net, server=use_server_paths)
+    create_all_SRs(shg_net, shg_images, shg_image_ids, filepath, prefix='psr_shg_')
+    create_all_SRs(tpef_net, tpef_images, tpef_image_ids, filepath, prefix='psr_tpef_')
     end_time = time.time()
     print("Elapsed time: %.1f s"%(end_time-start_time,))

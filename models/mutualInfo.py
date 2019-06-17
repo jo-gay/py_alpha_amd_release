@@ -48,16 +48,25 @@ class RegisterMI(Register):
         if fun == 'mi' or fun is None:
             self.mi_fun = mutual_info_score
         elif fun == 'normalized' or fun == 'norm':
-            self.mi_fun = normalized_mutual_info_score
+            self.mi_fun = self.norm_mi_arithmetic
         elif fun == 'adjusted' or fun == 'adj':
             self.mi_fun = adjusted_mutual_info_score
         else:
             self.mi_fun = fun
         
+    ###TODO: change this to a decorator or something?
+    def norm_mi_arithmetic(self, *args, **kwargs):
+        """Wrapper for scikit-learn NMI function to use arithmetic normalisation method if not specified.
+        """
+        #if a method has been specified then do not overwrite.
+        kwargs['average_method'] = kwargs.get('average_method', 'arithmetic')
+        return normalized_mutual_info_score(*args, **kwargs)
+    
     def make_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_weights, flo_mask_resampled, pyramid_factor):
 
-        mi_dist = MIDistance(self.mi_fun, levels=256) # reducing levels to 32 improves running time by less than 20%
+        # reducing levels to 32 improves running time by less than 20% but may improve stability
+        mi_dist = MIDistance(self.mi_fun, levels=32) 
         mi_dist.set_ref_image(ref_resampled, mask=ref_mask_resampled)
         mi_dist.set_flo_image(flo_resampled)
 

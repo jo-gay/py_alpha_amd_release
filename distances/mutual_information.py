@@ -149,7 +149,8 @@ class MIDistance:
 
         value = self.mi_fun(self.ref_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
                             warped_image[np.logical_and(warped_mask>0, self.ref_mask > 0)])
-        
+#        if value > 1:
+#            print("MI function returned a value > 1")
 #        if value > self.best_val:
 #            self.best_val = value
 #            self.best_trans = transform.copy()

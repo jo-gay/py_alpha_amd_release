@@ -14,17 +14,19 @@ import matplotlib.pyplot as plt
 #py_alpha_amd imports
 import sys, os, csv, time
 
-import transforms, filters, models, optimizers
+import transforms, filters, models, optimizers, distances
 from PIL import Image
-#from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
+from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
 
 import re #for matching filenames to a required pattern
 
 local_aligned_folder = '../data/aligned_190508/'
 local_mpm_folder = '../data/processed/'
+local_separate_mpm_folder = '../data/unprocessed/'
+local_sr_folder = '../data/struct_reprs/pca/'
 server_aligned_folder = '/data/jo/MPM Skin Deep Learning Project/aligned_190508/'
 server_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
-local_sr_folder = '../data/struct_reprs/pca/'
+server_separate_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/'
 server_sr_folder = '/data/jo/MPM Skin Deep Learning Project/struct_reprs/pca/'
 
 def getNextPair(verbose=False, server=False):
@@ -71,6 +73,7 @@ def getNextPair(verbose=False, server=False):
                         continue
                         
                     yield slide, roi_idx, mpm_path, al_path
+    return
 
 def getNextSRPair(folder, verbose=False):
     """Generator function to get next pair of images from structural representations folder.
@@ -79,18 +82,76 @@ def getNextSRPair(folder, verbose=False):
     the pattern, look for one that has the same name except with bf. If found, return the 
     paths and also the sample and region ids
     """
-    pattern = re.compile("^([0-9]+)_([0-9]+)_mpm_.*$")
+#    pattern = re.compile("^([0-9]+)_([0-9]+)_mpm_.*$")
+    pattern = re.compile("^psr_shg_([0-9a-zA-Z]+)_([0-9]+).tif$")
     (_, _, files) = next(os.walk(folder))
     for f in files:
         m = pattern.match(f)
         if not m: #Not an MPM file or at least, not one matching our pattern
             continue
-        bf_path = folder + f.replace('mpm', 'bf')
-        if os.path.isfile(bf_path):
-            yield m.group(1), m.group(2), folder+f, bf_path
+        
+#        bf_path = folder + f.replace('mpm', 'bf')
+#        if os.path.isfile(bf_path):
+#            yield m.group(1), m.group(2), folder+f, bf_path
+#        else:
+#            if verbose:
+#                print('MPM file %s: matching bf %s not found'%(f, bf_path))
+        tpef_path = folder + f.replace('shg', 'tpef')
+        if os.path.isfile(tpef_path):
+            yield m.group(1), m.group(2), folder+f, tpef_path
         else:
             if verbose:
-                print('MPM file %s: matching bf %s not found'%(f, bf_path))
+                print('SHG file %s: matching TPEF %s not found'%(f, tpef_path))
+    return
+                
+def getNextMPMPair(verbose=False, server=False):
+    """Generator function to get next pair of matching images out of a complicated directory structure.
+    
+    The SHG and two TPEF images are stored in the same folder. The two TPEF images need to be averaged.
+    
+    NOTE: unlike the above functions which return the path to the images, this one reads and returns
+    the images themselves.
+    """
+    shg_pattern = re.compile("^([0-9]+)-shg.tif$", re.IGNORECASE)
+    if server:
+        folder = server_separate_mpm_folder
+    else:
+        folder = local_separate_mpm_folder
+        
+    subdirs = ['Dysplastic/', 'Malignant/', 'Healthy/']
+
+    for sd in subdirs:
+        (_, slidedirs, _) = next(os.walk(folder+sd)) #get list of subdirs within this one
+
+        for slide in slidedirs:
+            full_path = folder + sd + slide + '/med/'
+            (_, _, files) = next(os.walk(full_path)) #get list of files within this folder
+
+            for f in files:
+                #Check each file in the subdir. If the file is an aligned file it will match the pattern above
+                m = shg_pattern.match(f)
+                if m:
+                    #Find the corresponding MPM image (only 148184 and 148185 currently exist)
+                    roi_idx = m.group(1)
+                    tpef1_path = full_path + roi_idx + '-tpef1.tif'
+                    tpef2_path = full_path + roi_idx + '-tpef2.tif'
+                    if os.path.isfile(tpef1_path) and os.path.isfile(tpef2_path):
+                        pass
+                    else:
+                        if verbose:
+                            print("Unable to find TPEF images", tpef1_path, tpef2_path)
+                        continue
+
+                    #If we found a set of three then read them and average the TPEFs
+                    blur = 3.0
+                    shg, _ = preProcessImageAndCopy(full_path+f, norm=True, blur=blur)
+                    tpef1, _ = preProcessImageAndCopy(tpef1_path, norm=True, blur=blur)
+                    tpef2, _ = preProcessImageAndCopy(tpef2_path, norm=True, blur=blur)
+                        
+                    yield slide, roi_idx, shg, (tpef1+tpef2)/2
+    
+    # Finished going through the files so end the generator
+    return
                     
 def getRandomTransform(maxRot=10, maxScale=1.15, maxTrans=8):
     """
@@ -134,14 +195,33 @@ def get_transf_error(t1, t2, size):
     
     return sum([np.sqrt(a*a + b*b) for a,b in dists])
 
+def MI_at(reg, transform, ref, ref_mask, flo):
+    """ Calculate the Mutual Information at a particular transform.
+    """
+    midist = distances.MIDistance(reg.mi_fun, levels=32)
+    midist.set_ref_image(ref, ref_mask)
+    midist.set_flo_image(flo)
+    v, _ = midist.value_and_derivatives(transform)
+    return v
 
-def preProcessImageAndCopy(path, norm=True):
+def SSD_at(reg, transform, ref, ref_mask, flo):
+    """ Calculate the Mean of Squares Difference at a particular transform.
+    """
+    ssdist = distances.SSDistance()
+    ssdist.set_ref_image(ref, ref_mask)
+    ssdist.set_flo_image(flo)
+    v, _ = ssdist.value_and_derivatives(transform)
+    return v
+
+def preProcessImageAndCopy(path, norm=True, blur=None):
     im = Image.open(path).convert('L')
     im = np.asarray(im)#[125:375,125:375] #Take a smaller region for speed
     
     # Keep unmodified copies of original images
     im_orig = im.copy()
     
+    if blur and blur > 0:
+        im = filters.gaussian_filter(im, blur)
     # Normalize
     if norm:
         im = filters.normalize(im, 0.0, None)
@@ -155,6 +235,19 @@ def preProcessImageAndCopy(path, norm=True):
 #    im = np.rint(im*63).astype('uint8')
     
     return im, im_orig
+
+def get_MI_gridmax(mi_grid_resultsfile):
+    """Read a file containing grid search results and return dictionary of max values.
+    
+    Args:
+        slide, region: Together these identify the images being aligned
+    """
+    with open(mi_grid_resultsfile, 'r') as f:
+        rdr = csv.reader(f, delimiter=',')
+        mi_gridmax = {(row[0], row[1]): row[7:12] for row in rdr}
+
+    return mi_gridmax
+            
     
 def centreAndApplyTransform(image, transform, outsize, mode='nearest'):
         transformed_im = np.zeros(outsize, image.dtype)
@@ -165,61 +258,82 @@ def centreAndApplyTransform(image, transform, outsize, mode='nearest'):
 
 def add_multiple_startpts(reg, count=5, p_scaling=None):
     for _ in range(count):
-        reg.add_initial_transform(getRandomTransform(maxRot=20, maxScale=1.2, maxTrans=20),\
+        reg.add_initial_transform(getRandomTransform(maxRot=5, maxScale=1.05, maxTrans=10),\
                                   param_scaling=p_scaling)
     
     
 def register_pairs(server=False):
+
     results=[]
-    skip = 0#39 #manual way to skip pairs that have already been processed
+    skip = 0 #25 #manual way to skip pairs that have already been processed
     limit = 200
+
+    np.random.seed(999) #For testing, make sure we get the same transforms each time
+    rndTransforms = [getRandomTransform(maxRot=5,maxScale=1.05,maxTrans=10) for _ in range(limit)]
+    #Reverse the list as we will pop transforms from the far end. Want these to be the same, even 
+    #if we change the limit later.
+    rndTransforms.reverse()
+
     folder = local_sr_folder
     if server:
         folder = server_sr_folder
     if server:
-        outfile = server_aligned_folder+'MI_coarse_grid.csv'
+        outfile = server_separate_mpm_folder+'PartII_test3.2.csv'
     else:
-        outfile = local_aligned_folder+'MI_coarse_grid.csv'
+        outfile = local_separate_mpm_folder+'PartII_test3.2.csv'
 
-#    for slide, roi_idx, mpm_path, al_path in getNextSRPair(folder):
-    for slide, roi_idx, mpm_path, al_path in getNextPair():
+        
+    id_trans = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                          transforms.Rigid2DTransform()])
+#    id_trans.set_params([1.,0.2,10.,10.]) #Nelder mead doesn't work starting from zeros
+    
+#    grid_params = get_MI_gridmax(local_separate_mpm_folder+'PartI_test4.csv')
+    
+    for slide, roi_idx, ref_path, flo_path in getNextSRPair(folder):
+#    for slide, roi_idx, mpm_path, al_path in getNextPair():
+#    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=False):
+        # Take the next random transform
+        rndTrans = rndTransforms.pop()
+
         if skip > 0:
-            print("Skipping %s"%mpm_path)
+            print("Skipping %s_%s"%(slide, roi_idx))
             skip -= 1
             continue
         limit -= 1
         if limit < 0:
             break
-        # Open and prepare the images: if using SRs then don't normalize
-#        ref_im, ref_im_orig = preProcessImageAndCopy(al_path, norm=False)
-#        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path, norm=False)
-        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
-        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
-    
-        # Choose a transform at random
-#        rndTrans = getRandomTransform(maxRot=5,maxScale=1.025,maxTrans=2)
-#        print("Random transform applied: %r"%rndTrans.get_params())
+        # Open and prepare the images: if using SRs then don't normalize (or do?)
+        ref_im, ref_im_orig = preProcessImageAndCopy(ref_path, norm=True, blur=3.0)
+        flo_im, flo_im_orig = preProcessImageAndCopy(flo_path, norm=True, blur=3.0)
+#        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
+#        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
+        #If aligning SHG + TPEF, keep a copy of the TPEF (floating) for later
+#        flo_im_orig = flo_im.copy()
+#        ref_im_orig = ref_im.copy()
+        
+        print("Random transform applied: %r"%rndTrans.get_params())
     
         # Apply the transform to the reference image, increasing the canvas size to avoid cutting off parts
-#        ref_im = centreAndApplyTransform(ref_im, rndTrans, np.rint(np.array(ref_im.shape)*1.5).astype('int'))
+        ref_im = centreAndApplyTransform(ref_im, rndTrans, np.rint(np.array(ref_im.shape)*1.5).astype('int'))
         
         # Show the images we are working with
         print("Aligning images for sample %s, region %s"%(slide, roi_idx) \
-#              + ". A transform of %r has been applied to the reference image"%str(rndTrans.get_params()))
+#              + ". A transform of %r has been applied to the reference image"%str(rndTrans.get_params())
 #               + " from folder %s"%folder)
         )
-        plt.figure(figsize=(12,6))
-        plt.subplot(121)
-        plt.imshow(ref_im, cmap='gray')
-        plt.title("Reference image")
-        plt.subplot(122)
-        plt.imshow(flo_im, cmap='gray')
-        plt.title("Floating image")
-        plt.show()
+        if False:
+            plt.figure(figsize=(12,6))
+            plt.subplot(121)
+            plt.imshow(ref_im, cmap='gray', vmin=0, vmax=1)
+            plt.title("Reference image")
+            plt.subplot(122)
+            plt.imshow(flo_im, cmap='gray', vmin=0, vmax=1)
+            plt.title("Floating image")
+            plt.show()
     
         # Choose an optimizer to find the position maximising the mutual information
-        reg = models.RegisterMI(2)
-#        reg = models.RegisterSSD(2)
+#        reg = models.RegisterMI(2)
+        reg = models.RegisterSSD(2)
 #        reg.set_optimizer('scipy')
         reg.set_optimizer('gridsearch')
 #        reg = models.RegisterAlphaAMD(2)
@@ -227,29 +341,28 @@ def register_pairs(server=False):
 #        
         # Since we have warped the original reference image, create a mask so that only the relevant
         # pixels are considered. Use the same warping function as above
-#        ref_mask = np.ones(ref_im_orig.shape, 'bool')
-#        ref_mask = centreAndApplyTransform(ref_mask, rndTrans, np.rint(np.array(ref_im_orig.shape)*1.5).astype('int'))
+        ref_mask = np.ones(ref_im_orig.shape, 'bool')
+        ref_mask = centreAndApplyTransform(ref_mask, rndTrans, np.rint(np.array(ref_im_orig.shape)*1.5).astype('int'))
         
         reg.set_image_data(ref_im, \
                            flo_im, \
-#                           ref_mask=ref_mask, \
-                           ref_mask=np.ones(ref_im.shape, 'bool'), \
+                           ref_mask=ref_mask, \
+#                           ref_mask=np.ones(ref_im.shape, 'bool'), \
                            flo_mask=np.ones(flo_im.shape, 'bool'), \
                            ref_weights=None, \
                            flo_weights=None
                            )
-        
-        t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
-                                              transforms.Rigid2DTransform()])
-#        t.set_params([1.,0.2,10.,10.]) #Nelder mead doesn't work starting from zeros
+
 
         #MI
-        reg.set_mutual_info_fun('normalized')
-        reg.add_initial_transform(t)
+#        reg.set_mutual_info_fun('normalized')
+        reg.add_initial_transform(id_trans)
         # There is no evidence so far, that pyramid levels lead the search towards the MI maximum.
-        reg.add_pyramid_levels(factors=[1,], sigmas=[3.0,])
+#        reg.add_pyramid_levels(factors=[1,], sigmas=[3.0,])
+        reg.add_pyramid_levels(factors=[1,], sigmas=[0.0,])
         # Try with a blurred full-resolution image first (or only)
 #        reg.add_pyramid_levels(factors=[1,1], sigmas=[5.0,5.0])
+
 
 #        #AlphaAMD
 #        reg.set_sampling_fraction(0.1)
@@ -257,11 +370,11 @@ def register_pairs(server=False):
 #        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
 #        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
 #        diag = 2.0/diag
-#        p_scaling=np.array([diag*10., diag*10., 1.0, 1.0])
-##        p_scaling=np.array([1.0, 100.0, 1.0/diag, 1.0/diag])
-#        reg.add_initial_transform(t, param_scaling=p_scaling)
-#        #in addition to the ID transform, add a bunch of random starting points
-#        add_multiple_startpts(reg, count=5, p_scaling=p_scaling)
+#        p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
+##        p_scaling = np.array([1.0, 100.0, 1.0/diag, 1.0/diag])
+#        reg.add_initial_transform(id_trans, param_scaling=p_scaling)
+#        # in addition to the ID transform, add a bunch of random starting points
+#        add_multiple_startpts(reg, count=20, p_scaling=p_scaling)
 #        # Learning-rate / Step lengths [[start1, end1], [start2, end2] ...] (for each pyramid level)
 #        step_lengths = np.array([[1., 1.], [1., 0.5], [0.5, 0.1]])
 #        reg.set_step_lengths(step_lengths)
@@ -269,6 +382,17 @@ def register_pairs(server=False):
 #        reg.set_alpha_levels(7)
 #        reg.add_pyramid_levels(factors=[4, 2, 1], sigmas=[5.0, 3.0, 0.0])
 
+#        #MI starting from gridmax already found
+#        if not (slide, roi_idx) in grid_params:
+#            print(f'Grid results not found for slide {slide}, region {roi_idx}')
+#            continue
+#        starting_params = grid_params[(slide, roi_idx)]
+#        s_trans = transforms.ScalingTransform(2, uniform=True)
+#        s_trans.set_params(starting_params[0])
+#        r_trans = transforms.Rigid2DTransform()
+#        r_trans.set_params(starting_params[1:4])
+#        starting_trans = transforms.CompositeTransform(2, [s_trans, r_trans])
+#        reg.add_initial_transform(starting_trans, param_scaling=p_scaling)
 
         reg.set_report_freq(500)
     
@@ -290,8 +414,8 @@ def register_pairs(server=False):
         ### Warp final image
         c = transforms.make_image_centered_transform(transform, ref_im, flo_im)
     
-    #    # Print out transformation parameters
-    #    print('Transformation parameters: %s.' % str(transform.get_params()))
+#       # Print out transformation parameters
+#        print('Transformation parameters: %s.' % str(transform.get_params()))
     
         # Create the output image
         im_warped = np.zeros(ref_im.shape)
@@ -300,26 +424,48 @@ def register_pairs(server=False):
         c.warp(In = flo_im_orig, Out = im_warped, mode='nearest', bg_value = 0.0)
     
         # Show the images we ended up with
-        print("Aligned images for sample %s, region %s"%(slide, roi_idx))
-        plt.figure(figsize=(12,6))
-        plt.subplot(121)
-        plt.imshow(ref_im, cmap='gray')
-        plt.title("Reference image")
-        plt.subplot(122)
-        plt.imshow(im_warped, cmap='gray')
-        plt.title("Floating image")
-        plt.show()
+        if False:
+            print("Aligned images for sample %s, region %s"%(slide, roi_idx))
+            plt.figure(figsize=(12,6))
+            plt.subplot(121)
+            plt.imshow(ref_im, cmap='gray', vmin=0, vmax=1)
+            plt.title("Reference image")
+            plt.subplot(122)
+            plt.imshow(im_warped, cmap='gray', vmin=0, vmax=1)
+            plt.title("Floating image")
+            plt.show()
 
-#        centred_gt_trans = transforms.make_image_centered_transform(rndTrans, \
-        centred_gt_trans = transforms.make_image_centered_transform(transforms.IdentityTransform(2), \
+        centred_gt_trans = transforms.make_image_centered_transform(rndTrans, \
+#        centred_gt_trans = transforms.make_image_centered_transform(transforms.IdentityTransform(2), \
                                                  ref_im, flo_im)
+
+#        gtmi = MI_at(reg, rndTrans, ref_im, ref_mask, flo_im)
+        gtssd = SSD_at(reg, rndTrans, ref_im, ref_mask, flo_im)
         err = get_transf_error(c, centred_gt_trans, flo_im.shape)
-        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"]")
-#        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"]")
-        print("Error: %5f"%err)
+#        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"] with MI %.4f"%(-value))
+        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"] with SSD %.4f"%(value))
+#        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"] with MI %.4f"%(-gtmi))
+        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"] with SSD %.4f"%(gtssd))
+        print("Average corner error: %5f"%(err/4))
+#        print("MI difference: %.5f"%(-gtmi+value))
+        print("SSD difference: %.5f"%(gtssd-value))
+#        print("Improvement over gridmax: %.5f"%(-value - float(starting_params[-1])))
         
-        resultLine = (slide, roi_idx, *c.get_params(), err, -value)
-#        resultLine = (slide, roi_idx, *rndTrans.get_params(), *c.get_params(), err)
+#        resultLine = (slide, roi_idx, *c.get_params(), err, -value)
+        
+        successFlag = reg.get_flags()
+        if len(successFlag) == 0:
+            successFlag = 'N/A'
+        else:
+            successFlag = successFlag[-1][-1] #just take the flag for the last transform and last pyramid level
+        resultLine = (slide, roi_idx, *rndTrans.get_params(), \
+#                      -gtmi, \
+                      gtssd, \
+                      *c.get_params(), \
+#                      -value, \
+                      value, \
+                      err, successFlag, \
+                      time.strftime('%Y-%m-%d %H:%M:%S'))
         results.append(resultLine)
         with open(outfile, 'a') as f:
             writer = csv.writer(f, delimiter=',')
@@ -394,15 +540,14 @@ def create_MI_surfaces(server=False):
 #            plt.ylabel('Rotation')
             plt.show()
 
-
-
         
 if __name__ == '__main__':
     start_time = time.time()
+    print('Start time:', time.strftime('%Y-%m-%d %H:%M:%S'))
     server_paths = False
     if len(sys.argv) > 1:
         server_paths = True
     register_pairs(server_paths)
 #    create_MI_surfaces(server_paths)
     end_time = time.time()
-    print("Elapsed time: %.1f"%(end_time-start_time))
+    print("Elapsed time: %.1f seconds"%(end_time-start_time))

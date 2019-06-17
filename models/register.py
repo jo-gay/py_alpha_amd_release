@@ -76,6 +76,7 @@ class Register:
         # Reporting/Output
         self.report_func = None
         self.report_freq = 25
+        self.flags = []
 
     def add_initial_transform(self, transform, param_scaling=None):
         if param_scaling is None:
@@ -186,12 +187,13 @@ class Register:
         #Affine parameter bounds:
         if len(centre) == 6:
             bounds = np.array([[-0.1, 0.1], [-0.25, 0.25], [-0.25, 0.25], [-0.1, 0.1], [-5, 5], [-5, 5]])*self.pyramid_factors[p_lvl]
+            steps=11
         #Composite (scale + rigid2d) parameter bounds:
         elif len(centre) == 4:
-            bounds = np.array([[-0.1, 0.1], [-10*np.pi/180, 10*np.pi/180], [-20, 20], [-20, 20]])#*self.pyramid_factors[p_lvl]
-#            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-5, 5], [-5, 5]])#*(2-p_lvl)
+#            bounds = np.array([[-0.1, 0.1], [-10*np.pi/180, 10*np.pi/180], [-20, 20], [-20, 20]])#*self.pyramid_factors[p_lvl]
+            bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-10, 10], [-10, 10]])#*(2-p_lvl)
             #Bounds set for mutual information surface calculation
-        steps = 11
+            steps = [11,11,11,11]
         
         if False: #Enable for MI surfaces
 #            bounds = np.array([[-0.2, 0.2], [-0.25*np.pi, 0.25*np.pi], [0, 0], [0, 0]])
@@ -207,6 +209,8 @@ class Register:
         
         return bounds, steps
 
+    def get_flags(self):
+        return self.flags
 
     def set_report_freq(self, freq):
         self.report_freq = freq
@@ -301,6 +305,8 @@ class Register:
             param_scaling = self.transforms_param_scaling[t_it]
 
             self.value_history.append([])
+            if self.opt_name == 'scipy':
+                self.flags.append([])
 
             for lvl_it in range(pyramid_level_count):
                 if self.opt_name == 'adam':
@@ -310,7 +316,7 @@ class Register:
                 elif self.opt_name == 'scipy':
                     opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
                     minim_opts = {'gtol': 1e-9, \
-                                  'eps': 0.02}
+                                  'eps': 0.1}
                     #For lower resolutions (earlier levels in the pyramid) use smaller steps to avoid
                     #translating too far. Also use a larger gradient tolerance as we don't need high 
                     #accuracy before the final level
@@ -354,6 +360,8 @@ class Register:
                     init_transform = opt.get_transform()
 
                 self.value_history[-1].append(opt.get_value_history())
+                if self.opt_name == 'scipy':
+                    self.flags[-1].append(opt.success)
                 print('Pyramid level %d terminating at'%lvl_it, \
                       '[' + ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) \
                       + '] with value %.4f'%opt.get_value())

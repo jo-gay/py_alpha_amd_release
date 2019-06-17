@@ -179,8 +179,10 @@ class SciPyOptimizer:
 
         self.transform.set_params(x_opt.x * self.param_scaling)
         self.termination_reason = x_opt.message
+        self.success = x_opt.success
         self.value_history = x_opt.fun
         
-        print(x_opt)
+        print('%s optimizer terminated with status %s and message %s'%(self.method, self.success, self.termination_reason))
+#        print(x_opt)
 
         return x_opt.nit
