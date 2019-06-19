@@ -21,7 +21,7 @@
 #
 
 #
-# Mutual information measure class
+# Mean of Squared distances measure class
 #
 
 import transforms
