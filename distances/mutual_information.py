@@ -26,6 +26,11 @@
 
 import transforms
 import numpy as np
+from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
+
+from functools import partial
+norm_mi_arithmetic = partial(normalized_mutual_info_score, average_method='arithmetic')
+
 
 class MIDistance:
     def __init__(self, fun, levels=256):
@@ -35,7 +40,7 @@ class MIDistance:
             fun: a mutual information function e.g. sklearn.metrics.{adjusted_mutual_info_score, 
             normalized_mutual_info_score, mutual_info_score}. Could in fact be any function that takes
             lists of (integer) intensity values for two images as flattened arrays and returns a 
-            similarity measure
+            similarity measure. If a string, will be interpreted as one of scikit-learn MI fns.
             levels: number of intensity levels in image, default 256. If a floating point image
             is provided, will be multiplied by this number minus 1 and rounded to nearest integer
             for mutual information comparison.
@@ -43,13 +48,31 @@ class MIDistance:
         self.ref_image = None
         self.flo_image = None
         self.ref_mask = None
-        self.mi_fun = fun
+        self.set_mutual_info_fun(fun)
 
         self.sampling_fraction = 1.0
         self.nLevels = levels - 1
         
         self.best_val = 0
         self.best_trans = None
+
+    def set_mutual_info_fun(self, mutual_info_fn=None):
+        """Set or change the choice of mutual information function. 
+        
+        It must take a pair of 1D arrays and return a scalar. 
+        Args:
+            fun: If it is a string, interpret as one of three sklearn.metrics functions
+            otherwise, assume it is a function that can be called as above.
+        """
+        if mutual_info_fn == 'mi' or mutual_info_fn is None:
+            self.mi_fun = mutual_info_score
+        elif mutual_info_fn == 'normalized' or mutual_info_fn == 'norm':
+            self.mi_fun = norm_mi_arithmetic
+        elif mutual_info_fn == 'adjusted' or mutual_info_fn == 'adj':
+            self.mi_fun = adjusted_mutual_info_score
+        else:
+            self.mi_fun = mutual_info_fn
+
 
     def set_ref_image(self, image, mask=None):
         """Set the reference (fixed) image to be used by the distance measure.

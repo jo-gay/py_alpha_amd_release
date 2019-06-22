@@ -21,28 +21,39 @@
 #
 
 #
-# Discriminative Local Derivative Patterns, distance class. 
-#
+# Discriminative Local Derivative Patterns, distance class. An implementation of
+# Jiang, D., Shi, Y., Chen, X., Wang, M., and Song, Z. (2017).  
+# Fast and robust multimodal imageregistration using a local derivative pattern.
+# Medical physics, 44(2):497–509.
+# https://aapm.onlinelibrary.wiley.com/doi/pdf/10.1002/mp.12049
+# 
 
 import transforms
 import numpy as np
+from matplotlib import pyplot as plt
 
 
-def x_deriv(image):
+def x_deriv(image, mode='diff', sigma=3.0):
     """Calculate the derivative in the x direction for each pixel in
     the given image.
     
     The derivative is calculated as d(x,y) = I(x, y) - I(x+1, y).
 
     Arguments:
-        image should be provided as a 2D ndarray. Indexing is in y, x order
+        image: should be provided as a 2D ndarray. Indexing is in y, x order
+        mode: one of 'diff' or 'gaussian'. Diff returns the left finite difference
+              while Gaussian uses a gaussian filter for a smoother result
+        sigma: parameter for gaussian derivative
 
     Returns:
         2D ndarray of derivatives, same shape as image. Final column is zeros.
     """
-    return np.pad(image[...,:-1] - image[...,1:], ((0,0),(0,1)), mode='constant')
+    if mode == 'diff':
+        return np.pad(image[...,:-1] - image[...,1:], ((0,0),(0,1)), mode='constant')
+    
+    raise NotImplementedError('Gaussian derivatives not yet implemented')
 
-def y_deriv(image):
+def y_deriv(image, mode='diff', sigma=3.0):
     """Calculate the derivative in the y direction for each pixel in
     the given image.
     
@@ -50,12 +61,17 @@ def y_deriv(image):
     finite difference.
 
     Arguments:
-        image should be provided as a 2D ndarray. Indexing is in y, x order
+        image: should be provided as a 2D ndarray. Indexing is in y, x order
+        mode: one of 'diff' or 'gaussian'. Diff returns the left finite difference
+              while Gaussian uses a gaussian filter for a smoother result
+        sigma: parameter for gaussian derivative
 
     Returns:
         2D ndarray of derivatives, same shape as image. Final row is zeros.
     """
-    return np.pad(image[:-1,...] - image[1:,...], ((0,1),(0,0)), mode='constant')
+    if mode == 'diff':
+        return np.pad(image[:-1,...] - image[1:,...], ((0,1),(0,0)), mode='constant')
+    raise NotImplementedError('Gaussian derivatives not yet implemented')
     
 
 def masked_not_xor(region1, region2, mask):
@@ -71,8 +87,35 @@ def masked_not_xor(region1, region2, mask):
                    -1)
     return ret
 
+def not_xor(region1, region2):
+    """ Given two image regions of the same size (2D ndarrays of booleans) return 
+        an ndarray of the same size containing: NOT XOR (True if the elements are the same)
+    """
+    return np.logical_not(np.logical_xor(region1, region2))
+
+def extend_mask(mask, pixels=1):
+    newmask = mask.copy()
+    newmask[pixels:,pixels:] = np.logical_and(mask[pixels:,pixels:], newmask[:-pixels,:-pixels])
+    newmask[:-pixels,pixels:] = np.logical_and(newmask[:-pixels,pixels:], newmask[pixels:,:-pixels])
+    newmask[pixels:,:-pixels] = np.logical_and(newmask[pixels:,:-pixels], newmask[:-pixels,pixels:])
+    newmask[:-pixels,:-pixels] = np.logical_and(newmask[:-pixels,:-pixels], newmask[pixels:,pixels:])
+    return newmask
+
+def binaryVectorToInt(v):
+    """Convert a vector of 1s and 0s to an integer.
+
+    If the vector contains any -1s return 0.
+    """
+    if -1 in v:
+        return 0
+    return int(''.join(map(str, v)), base=2)
+
+"""Create a vectorized version of the above to work on an ndarray
+"""
+binaryVectorsToInt = np.vectorize(binaryVectorToInt, signature='(n)->()')
+
 class dLDPDistance:
-    def __init__(self):
+    def __init__(self, mode='diff'):
         """Set up the SSD measure.
         
         """
@@ -80,13 +123,26 @@ class dLDPDistance:
         self.flo_image = None
         self.ref_mask = None
         self.ref_dLDP = None
+        
+        self.diff_mode = mode
 
         self.sampling_fraction = 1.0
         
         self.best_val = 0
         self.best_trans = None
 
-    def create_dLDP(self, image, mask=None, mode='finite'):
+    def dLDP_as_image(self, dLDP):
+        """Transform the representation into an image for visualization. 
+        
+        Map the descriptor for each pixel to a value between 0 and 2^(descriptor length)-1, 
+        then rescale to values between 0 and 1. Where the descriptor contains any -1 values,
+        this is mapped to zero.
+        """
+        intData = binaryVectorsToInt(dLDP)
+        intData = intData/(pow(2, len(dLDP[0,0,:]))-1)
+        return intData
+        
+    def create_dLDP(self, image, mask=None):
         """Create a discriminative Local Derivative Pattern descriptor for a given
         image and optional mask.
         
@@ -109,8 +165,8 @@ class dLDPDistance:
             mask = np.ones(image.shape, dtype='bool')
 
         #Calculate derivatives in both directions
-        xd = x_deriv(image, mode)
-        yd = y_deriv(image, mode)
+        xd = x_deriv(image, self.diff_mode)
+        yd = y_deriv(image, self.diff_mode)
         
         #Not interested in the actual values, just the signs. convert to true/false,
         #where true corresponds to a positive derivative
@@ -121,31 +177,35 @@ class dLDPDistance:
         mask[:,-1] = False
         mask[-1,:] = False
         
+        #Increase the masked out area by one pixel in each direction, so that we do
+        #not compare a pixel with a neighbour outside the mask.
+        mask = extend_mask(mask, pixels=1)
+        
         descriptor = np.zeros((*image.shape, 16), dtype='int') - 1
         
         # For each of the 8 directions, starting from above left and going clockwise,
         # determine whether the x derivative at the central pixel has the same sign 
         # as the y derivative of its neighbour,
         # and save these results into the descriptor
-        descriptor[1:, 1:, 0] = masked_not_xor(xd[1:,1:], yd[:-1,:-1], mask[:-1,:-1])
-        descriptor[1:, :, 1] = masked_not_xor(xd[1:,:], yd[:-1,:], mask[:-1,:])
-        descriptor[1:, :-1, 2] = masked_not_xor(xd[1:,:-1], yd[:-1,1:], mask[:-1,1:])
-        descriptor[:, :-1, 3] = masked_not_xor(xd[:,:-1], yd[:,1:], mask[:,1:])
-        descriptor[:-1, :-1, 4] = masked_not_xor(xd[:-1,:-1], yd[1:,1:], mask[1:,1:])
-        descriptor[:-1, :, 5] = masked_not_xor(xd[:-1,:], yd[1:,:], mask[1:,:])
-        descriptor[:-1, 1:, 6] = masked_not_xor(xd[:-1,1:], yd[1:,:-1], mask[1:,:-1])
-        descriptor[:, 1:, 7] = masked_not_xor(xd[:,1:], yd[:,:-1], mask[:,:-1])
+        descriptor[1:, 1:, 0] = not_xor(xd[1:,1:], yd[:-1,:-1])#, mask[:-1,:-1])
+        descriptor[1:, :, 1] = not_xor(xd[1:,:], yd[:-1,:])#, mask[:-1,:])
+        descriptor[1:, :-1, 2] = not_xor(xd[1:,:-1], yd[:-1,1:])#, mask[:-1,1:])
+        descriptor[:, :-1, 3] = not_xor(xd[:,:-1], yd[:,1:])#, mask[:,1:])
+        descriptor[:-1, :-1, 4] = not_xor(xd[:-1,:-1], yd[1:,1:])#, mask[1:,1:])
+        descriptor[:-1, :, 5] = not_xor(xd[:-1,:], yd[1:,:])#, mask[1:,:])
+        descriptor[:-1, 1:, 6] = not_xor(xd[:-1,1:], yd[1:,:-1])#, mask[1:,:-1])
+        descriptor[:, 1:, 7] = not_xor(xd[:,1:], yd[:,:-1])#, mask[:,:-1])
         
         # Now do the same but using the y derivative of the central pixel vs x 
         # derivatives of neighbours
-        descriptor[1:, 1:, 8] = masked_not_xor(yd[1:,1:], xd[:-1,:-1], mask[:-1,:-1])
-        descriptor[1:, :, 9] = masked_not_xor(yd[1:,:], xd[:-1,:], mask[:-1,:])
-        descriptor[1:, :-1, 10] = masked_not_xor(yd[1:,:-1], xd[:-1,1:], mask[:-1,1:])
-        descriptor[:, :-1, 11] = masked_not_xor(yd[:,:-1], xd[:,1:], mask[:,1:])
-        descriptor[:-1, :-1, 12] = masked_not_xor(yd[:-1,:-1], xd[1:,1:], mask[1:,1:])
-        descriptor[:-1, :, 13] = masked_not_xor(yd[:-1,:], xd[1:,:], mask[1:,:])
-        descriptor[:-1, 1:, 14] = masked_not_xor(yd[:-1,1:], xd[1:,:-1], mask[1:,:-1])
-        descriptor[:, 1:, 15] = masked_not_xor(yd[:,1:], xd[:,:-1], mask[:,:-1])
+        descriptor[1:, 1:, 8] = not_xor(yd[1:,1:], xd[:-1,:-1])#, mask[:-1,:-1])
+        descriptor[1:, :, 9] = not_xor(yd[1:,:], xd[:-1,:])#, mask[:-1,:])
+        descriptor[1:, :-1, 10] = not_xor(yd[1:,:-1], xd[:-1,1:])#, mask[:-1,1:])
+        descriptor[:, :-1, 11] = not_xor(yd[:,:-1], xd[:,1:])#, mask[:,1:])
+        descriptor[:-1, :-1, 12] = not_xor(yd[:-1,:-1], xd[1:,1:])#, mask[1:,1:])
+        descriptor[:-1, :, 13] = not_xor(yd[:-1,:], xd[1:,:])#, mask[1:,:])
+        descriptor[:-1, 1:, 14] = not_xor(yd[:-1,1:], xd[1:,:-1])#, mask[1:,:-1])
+        descriptor[:, 1:, 15] = not_xor(yd[:,1:], xd[:,:-1])#, mask[:,:-1])
         
         # Adjust the mask to exclude pixels where the full 8-vector could not be 
         # calculated (for a rectangle this is the outer rows and columns)
@@ -173,6 +233,20 @@ class dLDPDistance:
             self.ref_mask = np.ones(self.ref_image.shape, 'bool')
         
         self.ref_dLDP, self.ref_mask = self.create_dLDP(self.ref_image, self.ref_mask)
+        
+        if False:
+            im0 = self.dLDP_as_image(self.ref_dLDP[...,:8])
+            im90 = self.dLDP_as_image(self.ref_dLDP[...,8:])
+            
+            plt.figure(figsize=(16,16))
+            plt.subplot(131)
+            plt.imshow(image, cmap='gray', vmin=0, vmax=1)
+            plt.subplot(132)
+            plt.imshow(im0, cmap='gray', vmin=0, vmax=1)
+            plt.subplot(133)
+            plt.imshow(im90, cmap='gray', vmin=0, vmax=1)
+            plt.show()
+
 
     def set_flo_image(self, image):
         """Set the floating (moving) image to be used by the distance measure.
@@ -221,8 +295,10 @@ class dLDPDistance:
         Returns:
             average hamming distance between pairs of pixels.
         """
-        assert(ref_dLDP.shape == flo_dLDP.shape)
-        return np.logical_xor(ref_dLDP, flo_dLDP)/len(ref_dLDP.flatten())
+        assert(ref_dLDP.shape == flo_dLDP.shape), "Error: cannot compare dLDP representations for" + \
+                                                  " different sized images"
+
+        return np.sum(np.logical_xor(ref_dLDP, flo_dLDP))/(ref_dLDP.shape[0])
 
     def value_and_derivatives(self, transform):
         """Apply the given transform and calculate the dLDP distance between the 
@@ -261,6 +337,7 @@ class dLDPDistance:
 
         value = self.dLDPdist(self.ref_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
                             warped_image_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)])
+        
         
 #        if value > self.best_val:
 #            self.best_val = value

@@ -14,9 +14,9 @@ import matplotlib.pyplot as plt
 #py_alpha_amd imports
 import sys, os, csv, time
 
-import transforms, filters, models, optimizers, distances
+from register import Register
+import transforms, filters
 from PIL import Image
-from sklearn.metrics import adjusted_mutual_info_score, normalized_mutual_info_score, mutual_info_score
 
 import re #for matching filenames to a required pattern
 
@@ -28,6 +28,7 @@ server_aligned_folder = '/data/jo/MPM Skin Deep Learning Project/aligned_190508/
 server_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/processed/'
 server_separate_mpm_folder = '/data/jo/MPM Skin Deep Learning Project/'
 server_sr_folder = '/data/jo/MPM Skin Deep Learning Project/struct_reprs/pca/'
+
 
 def getNextPair(verbose=False, server=False):
     """Generator function to get next pair of matching images out of a complicated directory structure.
@@ -104,7 +105,7 @@ def getNextSRPair(folder, verbose=False):
                 print('SHG file %s: matching TPEF %s not found'%(f, tpef_path))
     return
                 
-def getNextMPMPair(verbose=False, server=False):
+def getNextMPMPair(verbose=False, server=False, norm=False, blur=0.0):
     """Generator function to get next pair of matching images out of a complicated directory structure.
     
     The SHG and two TPEF images are stored in the same folder. The two TPEF images need to be averaged.
@@ -143,10 +144,9 @@ def getNextMPMPair(verbose=False, server=False):
                         continue
 
                     #If we found a set of three then read them and average the TPEFs
-                    blur = 3.0
-                    shg, _ = preProcessImageAndCopy(full_path+f, norm=True, blur=blur)
-                    tpef1, _ = preProcessImageAndCopy(tpef1_path, norm=True, blur=blur)
-                    tpef2, _ = preProcessImageAndCopy(tpef2_path, norm=True, blur=blur)
+                    shg, _ = preProcessImageAndCopy(full_path+f, norm=norm, blur=blur)
+                    tpef1, _ = preProcessImageAndCopy(tpef1_path, norm=norm, blur=blur)
+                    tpef2, _ = preProcessImageAndCopy(tpef2_path, norm=norm, blur=blur)
                         
                     yield slide, roi_idx, shg, (tpef1+tpef2)/2
     
@@ -195,23 +195,67 @@ def get_transf_error(t1, t2, size):
     
     return sum([np.sqrt(a*a + b*b) for a,b in dists])
 
-def MI_at(reg, transform, ref, ref_mask, flo):
-    """ Calculate the Mutual Information at a particular transform.
-    """
-    midist = distances.MIDistance(reg.mi_fun, levels=32)
-    midist.set_ref_image(ref, ref_mask)
-    midist.set_flo_image(flo)
-    v, _ = midist.value_and_derivatives(transform)
-    return v
 
-def SSD_at(reg, transform, ref, ref_mask, flo):
-    """ Calculate the Mean of Squares Difference at a particular transform.
+
+def chooseGrid(centreTrans):
+    """Choose a reasonable range for each parameter, centered around the transform given.
+    
+    Args:
+        centreTrans is a transform object of the type required (only affine and composite(scale, rigid2d)
+        are handled so far). The grid will be centred around the parameters in this transform.
+        
+    Returns:
+        bounds gives the min and max for each parameter
+        steps is the number of points that should be linearly spaced between these bounds. If an integer,
+        the same number of steps is used in each dimension. If a list, it gives the number of steps for
+        each dimension.
+        
+    Note: The total number of function evaluations is steps to the power of 6 for affine or steps^4 for 
+    a composite scale+rigid transform. (or np.prod(steps) if steps varies). Running time increases dramatically
+    with additional steps.
     """
-    ssdist = distances.SSDistance()
-    ssdist.set_ref_image(ref, ref_mask)
-    ssdist.set_flo_image(flo)
-    v, _ = ssdist.value_and_derivatives(transform)
-    return v
+    centre = centreTrans.get_params()
+    #Affine parameter bounds:
+    if len(centre) == 6:
+        bounds = np.array([[-0.1, 0.1], [-0.25, 0.25], [-0.25, 0.25], [-0.1, 0.1], [-5, 5], [-5, 5]])
+        steps = 11
+    #Composite (scale + rigid2d) parameter bounds:
+    elif len(centre) == 4:
+        bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-10, 10], [-10, 10]])
+        steps = 11
+    
+    if False: #Enable for MI surfaces
+        bounds = np.array([[0, 0], [0, 0], [-20, 20], [-20, 20]])
+        steps = [1,1,81,81]
+
+    bounds = [bounds[i] + centre[i] for i in range(len(centre))]
+
+    return bounds, steps
+
+
+#def MI_at(reg, transform, ref, ref_mask, flo):
+#    """ Calculate the Mutual Information at a particular transform.
+#    """
+#    midist = distances.MIDistance(reg.mi_fun, levels=32)
+#    midist.set_ref_image(ref, ref_mask)
+#    midist.set_flo_image(flo)
+#    v, _ = midist.value_and_derivatives(transform)
+#    return v
+#
+#def SSD_at(reg, transform, ref, ref_mask, flo):
+#    """ Calculate the Mean of Squares Difference at a particular transform.
+#    """
+#    ssdist = distances.SSDistance()
+#    ssdist.set_ref_image(ref, ref_mask)
+#    ssdist.set_flo_image(flo)
+#    v, _ = ssdist.value_and_derivatives(transform)
+#    return v
+#
+#def alphaAMD_at(reg, transform, ref, ref_mask, flo):
+#    """ Calculate the alphaAMD metric at a particular transform.
+#    """
+#    v, _ = reg.measure.value_and_derivatives(transform)
+#    return v
 
 def preProcessImageAndCopy(path, norm=True, blur=None):
     im = Image.open(path).convert('L')
@@ -278,9 +322,9 @@ def register_pairs(server=False):
     if server:
         folder = server_sr_folder
     if server:
-        outfile = server_separate_mpm_folder+'PartII_test3.2.csv'
+        outfile = server_separate_mpm_folder+'PartIII_test1.csv'
     else:
-        outfile = local_separate_mpm_folder+'PartII_test3.2.csv'
+        outfile = local_separate_mpm_folder+'PartIII_test1.csv'
 
         
     id_trans = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
@@ -289,9 +333,9 @@ def register_pairs(server=False):
     
 #    grid_params = get_MI_gridmax(local_separate_mpm_folder+'PartI_test4.csv')
     
-    for slide, roi_idx, ref_path, flo_path in getNextSRPair(folder):
+#    for slide, roi_idx, ref_path, flo_path in getNextSRPair(folder):
 #    for slide, roi_idx, mpm_path, al_path in getNextPair():
-#    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=False):
+    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=False, norm=False, blur=0.0):
         # Take the next random transform
         rndTrans = rndTransforms.pop()
 
@@ -303,13 +347,13 @@ def register_pairs(server=False):
         if limit < 0:
             break
         # Open and prepare the images: if using SRs then don't normalize (or do?)
-        ref_im, ref_im_orig = preProcessImageAndCopy(ref_path, norm=True, blur=3.0)
-        flo_im, flo_im_orig = preProcessImageAndCopy(flo_path, norm=True, blur=3.0)
+#        ref_im, ref_im_orig = preProcessImageAndCopy(ref_path, norm=False, blur=0.0)
+#        flo_im, flo_im_orig = preProcessImageAndCopy(flo_path, norm=False, blur=0.0)
 #        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
 #        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
         #If aligning SHG + TPEF, keep a copy of the TPEF (floating) for later
-#        flo_im_orig = flo_im.copy()
-#        ref_im_orig = ref_im.copy()
+        flo_im_orig = flo_im.copy()
+        ref_im_orig = ref_im.copy()
         
         print("Random transform applied: %r"%rndTrans.get_params())
     
@@ -331,14 +375,20 @@ def register_pairs(server=False):
             plt.title("Floating image")
             plt.show()
     
-        # Choose an optimizer to find the position maximising the mutual information
-#        reg = models.RegisterMI(2)
-        reg = models.RegisterSSD(2)
-#        reg.set_optimizer('scipy')
-        reg.set_optimizer('gridsearch')
-#        reg = models.RegisterAlphaAMD(2)
-#        reg.set_optimizer('adam')
-#        
+        # Choose a model, set basic parameters for that model
+        reg = Register(2)
+#        reg.set_model('alphaAMD', alpha_levels=7, symmetric_measure=True, squared_measure=False)
+#        reg.set_model('MI', mutual_info_fun='norm')
+#        reg.set_model('ssd')
+        reg.set_model('dLDP')
+
+        # Choose an optimzer, set basic parameters for it
+#        reg.set_optimizer('adam', gradient_magnitude_threshold=1e-6)
+#        reg.set_optimizer('sgd', gradient_magnitude_threshold=1e-6)
+#        reg.set_optimizer('scipy', gradient_magnitude_threshold=1e-9, epsilon=0.02)
+        bounds, steps = chooseGrid(id_trans)
+        reg.set_optimizer('gridsearch', bounds=bounds, steps=steps)
+
         # Since we have warped the original reference image, create a mask so that only the relevant
         # pixels are considered. Use the same warping function as above
         ref_mask = np.ones(ref_im_orig.shape, 'bool')
@@ -354,32 +404,37 @@ def register_pairs(server=False):
                            )
 
 
-        #MI
-#        reg.set_mutual_info_fun('normalized')
+        
+        #Grid search
         reg.add_initial_transform(id_trans)
+        
+        #All except alphaAMD
         # There is no evidence so far, that pyramid levels lead the search towards the MI maximum.
-#        reg.add_pyramid_levels(factors=[1,], sigmas=[3.0,])
         reg.add_pyramid_levels(factors=[1,], sigmas=[0.0,])
         # Try with a blurred full-resolution image first (or only)
-#        reg.add_pyramid_levels(factors=[1,1], sigmas=[5.0,5.0])
+#        reg.add_pyramid_levels(factors=[1,1], sigmas=[5.0,0.0])
 
 
 #        #AlphaAMD
 #        reg.set_sampling_fraction(0.1)
-#        reg.set_iterations(2000)
+#        reg.set_iterations(3000)
+#
+#        #Scipy and AlphaAMD
 #        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
 #        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
 #        diag = 2.0/diag
-#        p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
+##        p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
+#        p_scaling = np.array([diag, diag, 1.0, 1.0])
 ##        p_scaling = np.array([1.0, 100.0, 1.0/diag, 1.0/diag])
 #        reg.add_initial_transform(id_trans, param_scaling=p_scaling)
+
 #        # in addition to the ID transform, add a bunch of random starting points
 #        add_multiple_startpts(reg, count=20, p_scaling=p_scaling)
+        
+#         #AlphaAMD
 #        # Learning-rate / Step lengths [[start1, end1], [start2, end2] ...] (for each pyramid level)
 #        step_lengths = np.array([[1., 1.], [1., 0.5], [0.5, 0.1]])
 #        reg.set_step_lengths(step_lengths)
-#        reg.set_gradient_magnitude_threshold(1e-6)
-#        reg.set_alpha_levels(7)
 #        reg.add_pyramid_levels(factors=[4, 2, 1], sigmas=[5.0, 3.0, 0.0])
 
 #        #MI starting from gridmax already found
@@ -405,7 +460,7 @@ def register_pairs(server=False):
         reg.initialize("./tmp/")
         
         # Start the registration
-        reg.run()
+        reg.run(verbose=True)
     
         out_transforms, values = reg.get_outputs()
         transform = out_transforms[np.argmin(values)]
@@ -436,19 +491,14 @@ def register_pairs(server=False):
             plt.show()
 
         centred_gt_trans = transforms.make_image_centered_transform(rndTrans, \
-#        centred_gt_trans = transforms.make_image_centered_transform(transforms.IdentityTransform(2), \
                                                  ref_im, flo_im)
-
-#        gtmi = MI_at(reg, rndTrans, ref_im, ref_mask, flo_im)
-        gtssd = SSD_at(reg, rndTrans, ref_im, ref_mask, flo_im)
+        
+        gtVal = reg.get_value_at(rndTrans)
         err = get_transf_error(c, centred_gt_trans, flo_im.shape)
-#        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"] with MI %.4f"%(-value))
-        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"] with SSD %.4f"%(value))
-#        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"] with MI %.4f"%(-gtmi))
-        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"] with SSD %.4f"%(gtssd))
+        print("Estimated transform:\t [", ','.join(['%.4f']*len(c.get_params()))%tuple(c.get_params())+"] with value %.4f"%(value))
+        print("True transform:\t\t [", ','.join(['%.4f']*len(rndTrans.get_params()))%tuple(rndTrans.get_params())+"] with value %.4f"%(gtVal))
         print("Average corner error: %5f"%(err/4))
-#        print("MI difference: %.5f"%(-gtmi+value))
-        print("SSD difference: %.5f"%(gtssd-value))
+        print("Value difference: %.5f"%(gtVal-value))
 #        print("Improvement over gridmax: %.5f"%(-value - float(starting_params[-1])))
         
 #        resultLine = (slide, roi_idx, *c.get_params(), err, -value)
@@ -459,10 +509,8 @@ def register_pairs(server=False):
         else:
             successFlag = successFlag[-1][-1] #just take the flag for the last transform and last pyramid level
         resultLine = (slide, roi_idx, *rndTrans.get_params(), \
-#                      -gtmi, \
-                      gtssd, \
+                      gtVal, \
                       *c.get_params(), \
-#                      -value, \
                       value, \
                       err, successFlag, \
                       time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -471,17 +519,9 @@ def register_pairs(server=False):
             writer = csv.writer(f, delimiter=',')
             writer.writerow(resultLine)
     
-    
-    #print(results)
-#    with open(outfile, 'a') as f:
-#        writer = csv.writer(f, delimiter=',')
-#        writer.writerow(["Slide", "Region", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error", "Value"])
-##        writer.writerow(["Slide", "Region", "GT_scale", "GT_rot", "GT_x", "GT_y", "Est_scale", "Est_rot", "Est_x", "Est_y", "Error"])
-#        writer.writerows(results)
 
 
 def create_MI_surfaces(server=False):
-    results=[]
     limit = 1
     for slide, roi_idx, mpm_path, al_path in getNextPair():
         limit -= 1
@@ -491,9 +531,14 @@ def create_MI_surfaces(server=False):
         ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
         flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
 
-        reg = models.RegisterMI(2)
-        reg.set_optimizer('gridsearch')
-        reg.set_mutual_info_fun('normalized')
+        reg = Register(2)
+        reg.set_model('MI', mutual_info_fun='norm')
+
+        t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                              transforms.Rigid2DTransform()])
+
+        bounds, steps = chooseGrid(t)
+        reg.set_optimizer('gridsearch', bounds=bounds, steps=steps)
         
         # Since we have warped the original reference image, create a mask so that only the relevant
         # pixels are considered. Use the same warping function as above
@@ -508,8 +553,6 @@ def create_MI_surfaces(server=False):
 
         reg.add_pyramid_levels(factors=[1,], sigmas=[3.0,])
 
-        t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
-                                              transforms.Rigid2DTransform()])
         reg.add_initial_transform(t)
         reg.set_report_freq(500)
     

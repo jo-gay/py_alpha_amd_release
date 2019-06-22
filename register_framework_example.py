@@ -52,11 +52,14 @@ symmetric_measure = True
 squared_measure = False
 
 # The number of iterations
-param_iterations = 2500
+param_iterations = 3000
 # The fraction of the points to sample randomly (0.0-1.0)
-param_sampling_fraction = 1.0
+param_sampling_fraction = 0.1
 # Number of iterations between each printed output (with current distance/gradient/parameters)
-param_report_freq = 100
+param_report_freq = 50
+
+# Directory to save output files - any existing files will be overwritten
+outdir = './test_images/output/'
 
 def main():
     np.random.seed(1000)
@@ -71,8 +74,8 @@ def main():
 
     ref_im = Image.open(ref_im_path).convert('L')
     flo_im = Image.open(flo_im_path).convert('L')
-    ref_im = np.asarray(ref_im)
-    flo_im = np.asarray(flo_im)
+    ref_im = np.asarray(ref_im)/255.
+    flo_im = np.asarray(flo_im)/255.
 
     # Make copies of original images
     ref_im_orig = ref_im.copy()
@@ -105,7 +108,7 @@ def main():
     # For SGD and adam, learning-rate / Step lengths given by [[start1, end1], [start2, end2] ...] (for each pyramid level)
     reg.set_optimizer('sgd', \
                       step_lengths=np.array([[1., 1.], [1., 0.5], [0.5, 0.1]]), \
-                      gradient_magnitude_threshold=1e-6, \
+                      gradient_magnitude_threshold=0.001, \
                       iterations=param_iterations
                       )
 #    reg.set_optimizer('scipy', \
@@ -129,12 +132,12 @@ def main():
     reg.set_sampling_fraction(param_sampling_fraction)
 
     # Create output directory
-    directory = os.path.dirname('./test_images/output/')
+    directory = os.path.dirname(outdir)
     if not os.path.exists(directory):
         os.makedirs(directory)
 
     # Start the pre-processing
-    reg.initialize('./test_images/output/')
+    reg.initialize(outdir)
     
     # Control the formatting of numpy
     np.set_printoptions(suppress=True, linewidth=200)
@@ -152,19 +155,22 @@ def main():
 
     # Create the output image
     ref_im_warped = np.zeros(ref_im.shape)
+    mask = np.ones(flo_im_orig.shape, dtype='bool')
+    warped_mask = np.zeros(ref_im.shape, dtype='bool')
 
     # Transform the floating image into the reference image space by applying transformation 'c'
     c.warp(In = flo_im_orig, Out = ref_im_warped, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
+    c.warp(In = mask, Out = warped_mask, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
 
     # Save the registered image
-    Image.fromarray(ref_im_warped).convert('RGB').save('./test_images/output/registered.png')
+    Image.fromarray(ref_im_warped).convert('RGB').save(outdir+'registered.png')
     
     # Compute the absolute difference image between the reference and registered images
     D1 = np.abs(ref_im_orig-ref_im_warped)
-    err = np.mean(D1)
+    err = np.mean(D1[warped_mask])
     print("Err: %f" % err)
 
-    Image.fromarray(D1).convert('RGB').save('./test_images/output/diff.png')
+    Image.fromarray(D1).convert('RGB').save(outdir+'diff.png')
 
     return True
 

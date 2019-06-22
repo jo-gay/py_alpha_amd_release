@@ -57,7 +57,7 @@ def _appendItems(currlist, suffixlist):
 class GridSearchOptimizer:
     """Calculate (dis)similarity between two images at each point on a grid of possible transforms.
     """    
-    def __init__(self, measure, transform, bounds, steps):
+    def __init__(self, measure, transform, bounds, steps, verbose=False):
         """Set up the grid search optimizer.
         
         Args:
@@ -81,8 +81,8 @@ class GridSearchOptimizer:
         self.report_freq = 0
         self.report_func = _default_report_callback
         self.value_history = []
-        self.steps = []
         self.set_steps(bounds, steps)
+        self.verbose = verbose
 
     ''' compatibility functions '''
     def set_step_length(self, *args, **kwargs):
@@ -211,6 +211,11 @@ class GridSearchOptimizer:
         Returns:
             value found at best transform on grid, according to the provided distance measure
         """
+        
+        if self.verbose:
+            print('Starting grid search with bounds: [' + \
+              ';'.join(['%5g to %5g']*len(self.steps))%tuple([(self.steps[i][0], self.steps[i][-1]) for i in range(len(self.steps))]) +']')
+
         for params in self.get_next_point():
             self.transform.set_params(params)
 
