@@ -368,7 +368,7 @@ class Register:
         """
         raise ValueError('Framework has not been initialized - please specify a model using set_model()')
 
-    def initialize(self, pyramid_images_output_path=None):
+    def initialize(self, pyramid_images_output_path=None, norm=True):
         """Initialize the registration framework: must be called before run().
         
         Prepare pyramid scheme by creating and saving downsampled versions of the images 
@@ -403,8 +403,9 @@ class Register:
             ref_mask_resampled = filters.downsample(self.ref_mask, factor)
             flo_mask_resampled = filters.downsample(self.flo_mask, factor)
 
-            ref_resampled = filters.normalize(ref_resampled, 0.0, ref_mask_resampled)
-            flo_resampled = filters.normalize(flo_resampled, 0.0, flo_mask_resampled)
+            if norm:
+                ref_resampled = filters.normalize(ref_resampled, 0.0, ref_mask_resampled)
+                flo_resampled = filters.normalize(flo_resampled, 0.0, flo_mask_resampled)
 
             if pyramid_images_output_path is not None and ref_resampled.ndim == 2:
                 Image.fromarray(ref_resampled).convert('RGB').save(pyramid_images_output_path+'ref_resampled_%d.png'%(i+1))

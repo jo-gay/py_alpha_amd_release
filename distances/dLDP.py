@@ -72,7 +72,50 @@ def y_deriv(image, mode='diff', sigma=3.0):
     if mode == 'diff':
         return np.pad(image[:-1,...] - image[1:,...], ((0,1),(0,0)), mode='constant')
     raise NotImplementedError('Gaussian derivatives not yet implemented')
+
+def deriv(image, direction):
+    """Calculate the derivative in the given direction for each pixel in
+    the given image.
     
+    The derivative is calculated as I'(Z_0) = I(Z_0) - I(Z_x), i.e. the  
+    finite difference where x is one of the neighbouring pixels, depending on the 
+    direction specified. Method from Zhang et al "Local Derivative Pattern 
+    Versus Local Binary Pattern", but consider rescaling due to difference in distance
+    between pixels in 0 & 90 vs 45 & 135 directions.
+
+    Arguments:
+        image: should be provided as a 2D ndarray. Indexing is in y, x order
+        direction: 0 => 0 degrees
+                   1 => 45 degrees
+                   2 => 90 degrees
+                   3 => 135 degrees
+
+    Returns:
+        2D ndarray of derivatives, same shape as image. Zeros where undefined
+    """
+    if direction == 0:
+        diff = image[:, :-1] - image[:, 1:]
+        diff = np.pad(diff, ((0,0),(0,1)), mode='constant')
+    elif direction == 1:
+        diff = image[:-1, :-1] - image[1:, 1:]
+        diff = np.pad(diff, ((0,1),(0,1)), mode='constant')
+    elif direction == 2:
+        diff = image[:-1, :] - image[1:, :]
+        diff = np.pad(diff, ((0,1),(0,0)), mode='constant')
+    else:
+        diff = image[:-1, 1:] - image[1:, :-1]
+        diff = np.pad(diff, ((0,1),(1,0)), mode='constant')
+        
+    return diff
+
+def deriv_4way(image):
+    """Calculate the derivative in four directions (0, 45, 90, 135 degrees) for 
+    each pixel in the given image.
+    
+    Returns:
+        4-channel derivative image, with shape (*image.shape, 4)
+    """
+    return np.stack([deriv(image, i) for i in range(4)], axis=-1)
 
 def masked_not_xor(region1, region2, mask):
     """ Given two image regions of the same size (2D ndarrays of booleans), and 
@@ -94,6 +137,12 @@ def not_xor(region1, region2):
     return np.logical_not(np.logical_xor(region1, region2))
 
 def extend_mask(mask, pixels=1):
+    """Given a binary mask, extend the masked out area by a number of pixels.
+    
+    Shifts the mask by pixels in each of 4 directions (45 degrees, 135 degrees,
+    225 degrees, 315 degrees). Any pixel covered by the shifted mask will be masked.
+    This will only work for a mask with relatively continuous areas masked out.
+    """
     newmask = mask.copy()
     newmask[pixels:,pixels:] = np.logical_and(mask[pixels:,pixels:], newmask[:-pixels,:-pixels])
     newmask[:-pixels,pixels:] = np.logical_and(newmask[:-pixels,pixels:], newmask[pixels:,:-pixels])
@@ -113,6 +162,42 @@ def binaryVectorToInt(v):
 """Create a vectorized version of the above to work on an ndarray
 """
 binaryVectorsToInt = np.vectorize(binaryVectorToInt, signature='(n)->()')
+
+
+def padded_neighbour_xor(image, direction, padvalue=0):
+    """For a given binary image / feature map of size (x, y, channels), for each pixel return
+    the xor of its own value with that of its 'direction'th neighbour, where neighbours 
+    are numbered from 1 to 8 clockwise from the top left corner. For pixels which do not
+    have a neighbour in that direction, return padding value given.
+    
+    This is for LDP but not used for dLDP
+    """
+    if direction == 1:
+        ret = np.pad(np.logical_xor(image[1:,1:,...], image[:-1,:-1,...]), ((1,0),(1,0),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 2:
+        ret = np.pad(np.logical_xor(image[1:,:,...], image[:-1,:,...]), ((1,0),(0,0),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 3:
+        ret = np.pad(np.logical_xor(image[1:,:-1,...], image[:-1,1:,...]), ((1,0),(0,1),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 4:
+        ret = np.pad(np.logical_xor(image[:,:-1,...], image[:,1:,...]), ((0,0),(0,1),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 5:
+        ret = np.pad(np.logical_xor(image[:-1,:-1,...], image[1:,1:,...]), ((0,1),(0,1),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 6:
+        ret = np.pad(np.logical_xor(image[:-1,:,...], image[1:,:,...]), ((0,1),(0,0),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 7:
+        ret = np.pad(np.logical_xor(image[:-1,1:,...], image[1:,:-1,...]), ((0,1),(1,0),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+    elif direction == 8:
+        ret = np.pad(np.logical_xor(image[:,1:,...], image[:,:-1,...]), ((0,0),(1,0),(0,0)), \
+                     mode='constant', constant_values=padvalue)
+        
+    return ret
 
 class dLDPDistance:
     def __init__(self, mode='diff'):
@@ -141,6 +226,69 @@ class dLDPDistance:
         intData = binaryVectorsToInt(dLDP)
         intData = intData/(pow(2, len(dLDP[0,0,:]))-1)
         return intData
+    
+    def create_LDP(self, image, mask=None):
+        """Create a Local Derivative Pattern descriptor for a given
+        image and optional mask, using 4 directions.
+        
+        Args:
+            image: ndarray
+            mask:  ndarray of true/false specifying which pixels to include/ignore. if None,
+            all pixels will be included
+            mode:  default 'finite' (this is the basic version which calculates the gradient as the difference
+                                     between the intensity at a pixel and that at its neighbour).
+                   alterative 'gaussian' to be added TODO
+        Returns:
+            LDP descriptor: 32 element binary array for each pixel in the given image. 
+                            Contains -1 where LDP could not be calculated due to edge
+                            of image or mask
+            mask:           adjusted mask to exclude pixels for which the full 32 bit
+                            descriptor could not be calculated
+        """
+        if mask is None:
+            mask = np.ones(image.shape, dtype='bool')
+
+        #Calculate derivatives in four directions
+        Iprime = deriv_4way(image)
+        
+        
+        # For each of the 8 neighbours, starting from above left and going clockwise,
+        # determine whether the derivative at the central pixel has the same sign 
+        # as that of its neighbour, in each of the 4 directions,
+        # and save these results into the descriptor
+
+#        descriptor = np.zeros((8, *Iprime.shape), dtype='int') - 1
+#        descriptor[0, 1:, 1:, :] = np.logical_xor(Iprime[1:,1:,:], Iprime[:-1,:-1,:])#, mask[:-1,:-1])
+#        descriptor[1, 1:, :, :] = np.logical_xor(Iprime[1:,:,:], Iprime[:-1,:,:])#, mask[:-1,:])
+#        descriptor[2, 1:, :-1, :] = np.logical_xor(Iprime[1:,:-1,:], Iprime[:-1,1:,:])#, mask[:-1,1:])
+#        descriptor[3, :, :-1, :] = np.logical_xor(Iprime[:,:-1,:], Iprime[:,1:,:])#, mask[:,1:])
+#        descriptor[4, :-1, :-1, :] = np.logical_xor(Iprime[:-1,:-1,:], Iprime[1:,1:,:])#, mask[1:,1:])
+#        descriptor[5, :-1, :, :] = np.logical_xor(Iprime[:-1,:,:], Iprime[1:,:,:])#, mask[1:,:])
+#        descriptor[6, :-1, 1:, :] = np.logical_xor(Iprime[:-1,1:,:], Iprime[1:,:-1,:])#, mask[1:,:-1])
+#        descriptor[7, :, 1:, :] = np.logical_xor(Iprime[:,1:,:], Iprime[:,:-1,:])#, mask[:,:-1])
+
+        # New method takes 54% of the amount of time of the above:
+        descriptor=[]
+        for i in range(8):
+            descriptor.append(padded_neighbour_xor(Iprime, direction=i+1, padvalue=-1))
+        descriptor = np.array(descriptor)
+        
+        # Want the 4 directions to be stacked in the descriptor so swap axes and then reshape
+        # to flatten the last two dimensions.
+        descriptor = np.rollaxis(descriptor, 0, 3)
+        descriptor = descriptor.reshape(*descriptor.shape[:2], -1)
+        
+        # mask out pixels on the edge of the image where we can't have a full descriptor
+        mask[0,:]=0
+        mask[-1,:]=0
+        mask[:,0]=0
+        mask[:,-1]=0
+        
+        # mask out pixels on the edge of the (remaining) unmasked region, where neighbouring pixels
+        # are outside the mask
+        mask = extend_mask(mask, pixels=1)
+        
+        return descriptor, mask
         
     def create_dLDP(self, image, mask=None):
         """Create a discriminative Local Derivative Pattern descriptor for a given
@@ -232,7 +380,8 @@ class dLDPDistance:
         if self.ref_mask is None or self.ref_mask.shape != self.ref_image.shape:
             self.ref_mask = np.ones(self.ref_image.shape, 'bool')
         
-        self.ref_dLDP, self.ref_mask = self.create_dLDP(self.ref_image, self.ref_mask)
+        #TODO: change back to dLDP
+        self.ref_dLDP, self.ref_mask = self.create_LDP(self.ref_image, self.ref_mask)
         
         if False:
             im0 = self.dLDP_as_image(self.ref_dLDP[...,:8])
@@ -326,14 +475,15 @@ class dLDPDistance:
         warped_mask = np.zeros(self.ref_image.shape)
     
         # Transform the floating image into the reference image space by applying transformation 'c_trans'
-        c_trans.warp(In = self.flo_image, Out = warped_image, mode='spline', bg_value = 0)
+        c_trans.warp(In = self.flo_image, Out = warped_image, mode='nearest', bg_value = 0)
         c_trans.warp(In = mask, Out = warped_mask, mode='nearest', bg_value = 0)
         
         # If the overlap is less than 40% then exclude it
         if len(warped_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)]) < 0.4*np.prod(self.flo_image.shape): #too small an overlap, skip it.
             return np.inf, None
         
-        warped_image_dLDP, warped_mask = self.create_dLDP(warped_image, warped_mask)
+        #TODO: turn back to dLDP
+        warped_image_dLDP, warped_mask = self.create_LDP(warped_image, warped_mask)
 
         value = self.dLDPdist(self.ref_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
                             warped_image_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)])

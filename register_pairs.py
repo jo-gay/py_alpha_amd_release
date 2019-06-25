@@ -197,40 +197,45 @@ def get_transf_error(t1, t2, size):
 
 
 
-def chooseGrid(centreTrans):
-    """Choose a reasonable range for each parameter, centered around the transform given.
+def gridBounds(centreTrans, scale_range, rot_range, transl_range):
+    """Calculate range for each parameter, centered around the transform given.
     
     Args:
         centreTrans is a transform object of the type required (only affine and composite(scale, rigid2d)
         are handled so far). The grid will be centred around the parameters in this transform.
+        scale_range - the max distance around the centre for scale parameter(s), as a proportion of the image
+        size (e.g. if centre is scale 1 then 0.1 gives scale 0.9 - 1.1)
+        rot_range - the max rotation in degrees
+        transl_range - the max translation in pixels
+        
+        For affine transforms the scale and rotation parameters are applied to the diag and non-diag elements
+        of the 2x2 matrix respectively.
         
     Returns:
         bounds gives the min and max for each parameter
-        steps is the number of points that should be linearly spaced between these bounds. If an integer,
-        the same number of steps is used in each dimension. If a list, it gives the number of steps for
-        each dimension.
-        
-    Note: The total number of function evaluations is steps to the power of 6 for affine or steps^4 for 
-    a composite scale+rigid transform. (or np.prod(steps) if steps varies). Running time increases dramatically
-    with additional steps.
     """
     centre = centreTrans.get_params()
     #Affine parameter bounds:
     if len(centre) == 6:
-        bounds = np.array([[-0.1, 0.1], [-0.25, 0.25], [-0.25, 0.25], [-0.1, 0.1], [-5, 5], [-5, 5]])
-        steps = 11
+        bounds = np.array([[-scale_range, scale_range], \
+                           [-rot_range*np.pi/180, rot_range*np.pi/180], \
+                           [-rot_range*np.pi/180, rot_range*np.pi/180], \
+                           [-scale_range, scale_range], \
+                           [-transl_range, transl_range], \
+                           [-transl_range, transl_range]])
     #Composite (scale + rigid2d) parameter bounds:
     elif len(centre) == 4:
-        bounds = np.array([[-0.05, 0.05], [-5*np.pi/180, 5*np.pi/180], [-10, 10], [-10, 10]])
-        steps = 11
+        bounds = np.array([[-scale_range, scale_range], \
+                           [-rot_range*np.pi/180, rot_range*np.pi/180], \
+                           [-transl_range, transl_range], \
+                           [-transl_range, transl_range]])
     
     if False: #Enable for MI surfaces
-        bounds = np.array([[0, 0], [0, 0], [-20, 20], [-20, 20]])
-        steps = [1,1,81,81]
+        bounds = np.array([[-scale_range, scale_range], [0, 0], [-20, 20], [-20, 20]])
 
     bounds = [bounds[i] + centre[i] for i in range(len(centre))]
 
-    return bounds, steps
+    return bounds
 
 
 #def MI_at(reg, transform, ref, ref_mask, flo):
@@ -307,13 +312,30 @@ def add_multiple_startpts(reg, count=5, p_scaling=None):
     
     
 def register_pairs(server=False):
-
     results=[]
-    skip = 0 #25 #manual way to skip pairs that have already been processed
+    id_trans = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                          transforms.Rigid2DTransform()])
+    
+    ##### Running parameters to update each time #####
+    modelname = 'dLDP' #['alphaAMD', 'MI', 'SSD', 'dLDP']
+    modelparams = {}
+#    modelparams = {'alpha_levels':7, 'symmetric_measure':True, 'squared_measure':False}
+#    modelparams = {'mutual_info_fun':'norm'}
+
+    optname = 'gridsearch' #['sgd', 'adam', 'gridsearch', 'scipy']
+#    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.02}
+    optparams = {'bounds':gridBounds(id_trans, 0.05, 5, 10), 'steps':11}
+#    optparams = {'gradient_magnitude_threshold':1e-6}
+    
+    norm = True
+    blur = 0.0
+    skip = 4 #25 #manual way to skip pairs that have already been processed
+    results_file = 'PartIII_test2.csv'
     limit = 200
+    ##### End running parameters #####
 
     np.random.seed(999) #For testing, make sure we get the same transforms each time
-    rndTransforms = [getRandomTransform(maxRot=5,maxScale=1.05,maxTrans=10) for _ in range(limit)]
+    rndTransforms = [getRandomTransform(maxRot=5,maxScale=1.05,maxTrans=10) for _ in range(limit+1)]
     #Reverse the list as we will pop transforms from the far end. Want these to be the same, even 
     #if we change the limit later.
     rndTransforms.reverse()
@@ -322,20 +344,19 @@ def register_pairs(server=False):
     if server:
         folder = server_sr_folder
     if server:
-        outfile = server_separate_mpm_folder+'PartIII_test1.csv'
+        outfile = server_separate_mpm_folder+results_file
     else:
-        outfile = local_separate_mpm_folder+'PartIII_test1.csv'
+        outfile = local_separate_mpm_folder+results_file
 
         
-    id_trans = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
-                                          transforms.Rigid2DTransform()])
 #    id_trans.set_params([1.,0.2,10.,10.]) #Nelder mead doesn't work starting from zeros
     
 #    grid_params = get_MI_gridmax(local_separate_mpm_folder+'PartI_test4.csv')
     
 #    for slide, roi_idx, ref_path, flo_path in getNextSRPair(folder):
 #    for slide, roi_idx, mpm_path, al_path in getNextPair():
-    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=False, norm=False, blur=0.0):
+    ####SWAPPED REF & FLO
+    for slide, roi_idx, flo_im, ref_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
         # Take the next random transform
         rndTrans = rndTransforms.pop()
 
@@ -377,17 +398,10 @@ def register_pairs(server=False):
     
         # Choose a model, set basic parameters for that model
         reg = Register(2)
-#        reg.set_model('alphaAMD', alpha_levels=7, symmetric_measure=True, squared_measure=False)
-#        reg.set_model('MI', mutual_info_fun='norm')
-#        reg.set_model('ssd')
-        reg.set_model('dLDP')
+        reg.set_model(modelname, **modelparams)
 
         # Choose an optimzer, set basic parameters for it
-#        reg.set_optimizer('adam', gradient_magnitude_threshold=1e-6)
-#        reg.set_optimizer('sgd', gradient_magnitude_threshold=1e-6)
-#        reg.set_optimizer('scipy', gradient_magnitude_threshold=1e-9, epsilon=0.02)
-        bounds, steps = chooseGrid(id_trans)
-        reg.set_optimizer('gridsearch', bounds=bounds, steps=steps)
+        reg.set_optimizer(optname, **optparams)
 
         # Since we have warped the original reference image, create a mask so that only the relevant
         # pixels are considered. Use the same warping function as above
@@ -397,15 +411,13 @@ def register_pairs(server=False):
         reg.set_image_data(ref_im, \
                            flo_im, \
                            ref_mask=ref_mask, \
-#                           ref_mask=np.ones(ref_im.shape, 'bool'), \
                            flo_mask=np.ones(flo_im.shape, 'bool'), \
                            ref_weights=None, \
                            flo_weights=None
                            )
 
-
         
-        #Grid search
+#        #Grid search
         reg.add_initial_transform(id_trans)
         
         #All except alphaAMD
@@ -457,7 +469,7 @@ def register_pairs(server=False):
             os.makedirs(directory)
     
         # Start the pre-processing
-        reg.initialize("./tmp/")
+        reg.initialize("./tmp/", norm=norm)
         
         # Start the registration
         reg.run(verbose=True)
@@ -521,25 +533,47 @@ def register_pairs(server=False):
     
 
 
-def create_MI_surfaces(server=False):
+def create_surface(server=False):
     limit = 1
-    for slide, roi_idx, mpm_path, al_path in getNextPair():
+    
+    id_trans = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                          transforms.Rigid2DTransform()])
+    
+    ##### Running parameters to update each time #####
+    modelname = 'dLDP' #['alphaAMD', 'MI', 'SSD', 'dLDP']
+    modelparams = {}
+#    modelparams = {'alpha_levels':7, 'symmetric_measure':True, 'squared_measure':False}
+#    modelparams = {'mutual_info_fun':'norm'}
+
+    optname = 'gridsearch' #['sgd', 'adam', 'gridsearch', 'scipy']
+#    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.02}
+    optparams = {'bounds':gridBounds(id_trans, 0, 0, 10), 'steps':[1,1,81,81]}
+#    optparams = {'gradient_magnitude_threshold':1e-6}
+    
+    norm = True
+    blur = 3.0
+#    results_file = 'PartIII_test2.csv'
+    limit = 5
+    ##### End running parameters #####
+    
+    
+    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
         limit -= 1
         if limit < 0:
             break
         # Open and prepare the images
-        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
-        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
+#        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
+#        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
 
         reg = Register(2)
-        reg.set_model('MI', mutual_info_fun='norm')
+        reg.set_model(modelname, **modelparams)
+
+        # Choose an optimzer, set basic parameters for it
+        reg.set_optimizer(optname, **optparams)
 
         t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
                                               transforms.Rigid2DTransform()])
 
-        bounds, steps = chooseGrid(t)
-        reg.set_optimizer('gridsearch', bounds=bounds, steps=steps)
-        
         # Since we have warped the original reference image, create a mask so that only the relevant
         # pixels are considered. Use the same warping function as above
         
@@ -551,7 +585,7 @@ def create_MI_surfaces(server=False):
                            flo_weights=None
                            )
 
-        reg.add_pyramid_levels(factors=[1,], sigmas=[3.0,])
+        reg.add_pyramid_levels(factors=[1,], sigmas=[0.0,])
 
         reg.add_initial_transform(t)
         reg.set_report_freq(500)
@@ -567,18 +601,29 @@ def create_MI_surfaces(server=False):
         # Start the registration
         reg.run()
         
-        values = - np.array(reg.get_value_history(0, 0))
+        values = np.array(reg.get_value_history(0, 0))
 
-        if True: #2d surface
-            pts = 81
-            values.resize((pts,pts))
+        if True: #Show 2d surface
+            npts = optparams['steps'][-1]
+            values.resize((npts,npts))
+            gridpts = np.linspace(*optparams['bounds'][2], npts)
             
-            plt.figure(figsize=(8,8))
+            min_loc = list(reversed(np.unravel_index(np.argmin(values), \
+                                         values.shape)))
+            min_loc = np.linspace(gridpts[0], gridpts[-1], npts)[min_loc]
+            plt.figure(figsize=(10,8))
 #            plt.contourf(np.linspace(0.8, 1.2, pts), np.linspace(-0.25*np.pi, 0.25*np.pi, pts), values)
-            plt.contourf(np.linspace(-20, 20, pts), np.linspace(-20, 20, pts), values)
+#            plt.contourf(gridpts, gridpts, values)
+            plt.imshow(values, extent=[gridpts[0], gridpts[-1], gridpts[0], gridpts[-1]], \
+                       origin='lower', cmap='inferno_r')
+            plt.title("LDP surface at different translations using\n" \
+                      +"correct scale and rotation "\
+                      +"(smoothed images)")
             plt.colorbar()
-            plt.title("Mutual Information surface at offset scale and rotation\n"\
-                      +"with different translations (smoothed)")
+            plt.annotate('Min=%.4f at (%.1f, %.1f)'%(np.min(values),*min_loc), xy=min_loc, xycoords='data',
+             xytext=(0.6, 0.04), textcoords='figure fraction',
+             arrowprops=dict(arrowstyle="->"))
+
 #            plt.xlabel('Scale')
 #            plt.ylabel('Rotation')
             plt.show()
@@ -590,7 +635,7 @@ if __name__ == '__main__':
     server_paths = False
     if len(sys.argv) > 1:
         server_paths = True
-    register_pairs(server_paths)
-#    create_MI_surfaces(server_paths)
+#    register_pairs(server_paths)
+    create_surface(server_paths)
     end_time = time.time()
     print("Elapsed time: %.1f seconds"%(end_time-start_time))
