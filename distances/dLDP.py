@@ -144,10 +144,10 @@ def extend_mask(mask, pixels=1):
     This will only work for a mask with relatively continuous areas masked out.
     """
     newmask = mask.copy()
-    newmask[pixels:,pixels:] = np.logical_and(mask[pixels:,pixels:], newmask[:-pixels,:-pixels])
-    newmask[:-pixels,pixels:] = np.logical_and(newmask[:-pixels,pixels:], newmask[pixels:,:-pixels])
-    newmask[pixels:,:-pixels] = np.logical_and(newmask[pixels:,:-pixels], newmask[:-pixels,pixels:])
-    newmask[:-pixels,:-pixels] = np.logical_and(newmask[:-pixels,:-pixels], newmask[pixels:,pixels:])
+    newmask[pixels:,pixels:] = np.logical_and(mask[pixels:,pixels:], mask[:-pixels,:-pixels])
+    newmask[:-pixels,pixels:] = np.logical_and(newmask[:-pixels,pixels:], mask[pixels:,:-pixels])
+    newmask[pixels:,:-pixels] = np.logical_and(newmask[pixels:,:-pixels], mask[:-pixels,pixels:])
+    newmask[:-pixels,:-pixels] = np.logical_and(newmask[:-pixels,:-pixels], mask[pixels:,pixels:])
     return newmask
 
 def binaryVectorToInt(v):
@@ -173,34 +173,34 @@ def padded_neighbour_xor(image, direction, padvalue=0):
     This is for LDP but not used for dLDP
     """
     if direction == 1:
-        ret = np.pad(np.logical_xor(image[1:,1:,...], image[:-1,:-1,...]), ((1,0),(1,0),(0,0)), \
+        ret = np.pad(np.logical_xor(image[1:,1:,...], image[:-1,:-1,...]).astype('int'), ((1,0),(1,0),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 2:
-        ret = np.pad(np.logical_xor(image[1:,:,...], image[:-1,:,...]), ((1,0),(0,0),(0,0)), \
+        ret = np.pad(np.logical_xor(image[1:,:,...], image[:-1,:,...]).astype('int'), ((1,0),(0,0),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 3:
-        ret = np.pad(np.logical_xor(image[1:,:-1,...], image[:-1,1:,...]), ((1,0),(0,1),(0,0)), \
+        ret = np.pad(np.logical_xor(image[1:,:-1,...], image[:-1,1:,...]).astype('int'), ((1,0),(0,1),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 4:
-        ret = np.pad(np.logical_xor(image[:,:-1,...], image[:,1:,...]), ((0,0),(0,1),(0,0)), \
+        ret = np.pad(np.logical_xor(image[:,:-1,...], image[:,1:,...]).astype('int'), ((0,0),(0,1),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 5:
-        ret = np.pad(np.logical_xor(image[:-1,:-1,...], image[1:,1:,...]), ((0,1),(0,1),(0,0)), \
+        ret = np.pad(np.logical_xor(image[:-1,:-1,...], image[1:,1:,...]).astype('int'), ((0,1),(0,1),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 6:
-        ret = np.pad(np.logical_xor(image[:-1,:,...], image[1:,:,...]), ((0,1),(0,0),(0,0)), \
+        ret = np.pad(np.logical_xor(image[:-1,:,...], image[1:,:,...]).astype('int'), ((0,1),(0,0),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 7:
-        ret = np.pad(np.logical_xor(image[:-1,1:,...], image[1:,:-1,...]), ((0,1),(1,0),(0,0)), \
+        ret = np.pad(np.logical_xor(image[:-1,1:,...], image[1:,:-1,...]).astype('int'), ((0,1),(1,0),(0,0)), \
                      mode='constant', constant_values=padvalue)
     elif direction == 8:
-        ret = np.pad(np.logical_xor(image[:,1:,...], image[:,:-1,...]), ((0,0),(1,0),(0,0)), \
+        ret = np.pad(np.logical_xor(image[:,1:,...], image[:,:-1,...]).astype('int'), ((0,0),(1,0),(0,0)), \
                      mode='constant', constant_values=padvalue)
         
     return ret
 
 class dLDPDistance:
-    def __init__(self, mode='diff'):
+    def __init__(self, mode='diff', interpolation='nearest'):
         """Set up the SSD measure.
         
         """
@@ -210,6 +210,7 @@ class dLDPDistance:
         self.ref_dLDP = None
         
         self.diff_mode = mode
+        self.interpolation = interpolation
 
         self.sampling_fraction = 1.0
         
@@ -475,7 +476,7 @@ class dLDPDistance:
         warped_mask = np.zeros(self.ref_image.shape)
     
         # Transform the floating image into the reference image space by applying transformation 'c_trans'
-        c_trans.warp(In = self.flo_image, Out = warped_image, mode='nearest', bg_value = 0)
+        c_trans.warp(In = self.flo_image, Out = warped_image, mode=self.interpolation, bg_value = 0)
         c_trans.warp(In = mask, Out = warped_mask, mode='nearest', bg_value = 0)
         
         # If the overlap is less than 40% then exclude it
