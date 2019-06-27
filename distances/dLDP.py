@@ -137,7 +137,9 @@ def not_xor(region1, region2):
     return np.logical_not(np.logical_xor(region1, region2))
 
 def extend_mask(mask, pixels=1):
-    """Given a binary mask, extend the masked out area by a number of pixels.
+    """Given a binary mask, extend the masked out area by a number of pixels such that 
+    an unmasked pixel becomes masked if any of its diagonal neighbours (at specified
+    distance) are masked.
     
     Shifts the mask by pixels in each of 4 directions (45 degrees, 135 degrees,
     225 degrees, 315 degrees). Any pixel covered by the shifted mask will be masked.
@@ -251,6 +253,8 @@ class dLDPDistance:
 
         #Calculate derivatives in four directions
         Iprime = deriv_4way(image)
+        #Convert to binary where True means >= 0
+        Iprime = Iprime >= np.abs(Iprime)
         
         
         # For each of the 8 neighbours, starting from above left and going clockwise,
@@ -276,7 +280,7 @@ class dLDPDistance:
         
         # Want the 4 directions to be stacked in the descriptor so swap axes and then reshape
         # to flatten the last two dimensions.
-        descriptor = np.rollaxis(descriptor, 0, 3)
+        descriptor = np.rollaxis(descriptor, 0, 4)
         descriptor = descriptor.reshape(*descriptor.shape[:2], -1)
         
         # mask out pixels on the edge of the image where we can't have a full descriptor
