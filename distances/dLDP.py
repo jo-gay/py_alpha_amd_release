@@ -253,8 +253,8 @@ class dLDPDistance:
 
         #Calculate derivatives in four directions
         Iprime = deriv_4way(image)
-        #Convert to binary where True means >= 0
-        Iprime = Iprime >= np.abs(Iprime)
+        #Convert derivatives to binary where True means >= 0
+        Iprime = Iprime >= 0
         
         
         # For each of the 8 neighbours, starting from above left and going clockwise,
@@ -278,8 +278,8 @@ class dLDPDistance:
             descriptor.append(padded_neighbour_xor(Iprime, direction=i+1, padvalue=-1))
         descriptor = np.array(descriptor)
         
-        # Want the 4 directions to be stacked in the descriptor so swap axes and then reshape
-        # to flatten the last two dimensions.
+        # Want the 4 directions to be stacked in the descriptor so more the new 'neighbour' axis
+        # to the end and then reshape to flatten the last two dimensions.
         descriptor = np.rollaxis(descriptor, 0, 4)
         descriptor = descriptor.reshape(*descriptor.shape[:2], -1)
         
@@ -323,10 +323,12 @@ class dLDPDistance:
         
         #Not interested in the actual values, just the signs. convert to true/false,
         #where true corresponds to a positive derivative
-        xd = xd >= np.abs(xd)
-        yd = yd >= np.abs(yd)
+        xd = xd >= 0
+        yd = yd >= 0
 
-        #mask out the final row and column as we don't have derivatives for these
+        #mask out the first and last row and column as we don't have derivatives for these
+        mask[0,:] = False
+        mask[:,0] = False
         mask[:,-1] = False
         mask[-1,:] = False
         
@@ -340,25 +342,25 @@ class dLDPDistance:
         # determine whether the x derivative at the central pixel has the same sign 
         # as the y derivative of its neighbour,
         # and save these results into the descriptor
-        descriptor[1:, 1:, 0] = not_xor(xd[1:,1:], yd[:-1,:-1])#, mask[:-1,:-1])
-        descriptor[1:, :, 1] = not_xor(xd[1:,:], yd[:-1,:])#, mask[:-1,:])
-        descriptor[1:, :-1, 2] = not_xor(xd[1:,:-1], yd[:-1,1:])#, mask[:-1,1:])
-        descriptor[:, :-1, 3] = not_xor(xd[:,:-1], yd[:,1:])#, mask[:,1:])
-        descriptor[:-1, :-1, 4] = not_xor(xd[:-1,:-1], yd[1:,1:])#, mask[1:,1:])
-        descriptor[:-1, :, 5] = not_xor(xd[:-1,:], yd[1:,:])#, mask[1:,:])
-        descriptor[:-1, 1:, 6] = not_xor(xd[:-1,1:], yd[1:,:-1])#, mask[1:,:-1])
-        descriptor[:, 1:, 7] = not_xor(xd[:,1:], yd[:,:-1])#, mask[:,:-1])
+        descriptor[1:, 1:, 0] = np.logical_xor(xd[1:,1:], yd[:-1,:-1])#, mask[:-1,:-1])
+        descriptor[1:, :, 1] = np.logical_xor(xd[1:,:], yd[:-1,:])#, mask[:-1,:])
+        descriptor[1:, :-1, 2] = np.logical_xor(xd[1:,:-1], yd[:-1,1:])#, mask[:-1,1:])
+        descriptor[:, :-1, 3] = np.logical_xor(xd[:,:-1], yd[:,1:])#, mask[:,1:])
+        descriptor[:-1, :-1, 4] = np.logical_xor(xd[:-1,:-1], yd[1:,1:])#, mask[1:,1:])
+        descriptor[:-1, :, 5] = np.logical_xor(xd[:-1,:], yd[1:,:])#, mask[1:,:])
+        descriptor[:-1, 1:, 6] = np.logical_xor(xd[:-1,1:], yd[1:,:-1])#, mask[1:,:-1])
+        descriptor[:, 1:, 7] = np.logical_xor(xd[:,1:], yd[:,:-1])#, mask[:,:-1])
         
         # Now do the same but using the y derivative of the central pixel vs x 
         # derivatives of neighbours
-        descriptor[1:, 1:, 8] = not_xor(yd[1:,1:], xd[:-1,:-1])#, mask[:-1,:-1])
-        descriptor[1:, :, 9] = not_xor(yd[1:,:], xd[:-1,:])#, mask[:-1,:])
-        descriptor[1:, :-1, 10] = not_xor(yd[1:,:-1], xd[:-1,1:])#, mask[:-1,1:])
-        descriptor[:, :-1, 11] = not_xor(yd[:,:-1], xd[:,1:])#, mask[:,1:])
-        descriptor[:-1, :-1, 12] = not_xor(yd[:-1,:-1], xd[1:,1:])#, mask[1:,1:])
-        descriptor[:-1, :, 13] = not_xor(yd[:-1,:], xd[1:,:])#, mask[1:,:])
-        descriptor[:-1, 1:, 14] = not_xor(yd[:-1,1:], xd[1:,:-1])#, mask[1:,:-1])
-        descriptor[:, 1:, 15] = not_xor(yd[:,1:], xd[:,:-1])#, mask[:,:-1])
+        descriptor[1:, 1:, 8] = np.logical_xor(yd[1:,1:], xd[:-1,:-1])#, mask[:-1,:-1])
+        descriptor[1:, :, 9] = np.logical_xor(yd[1:,:], xd[:-1,:])#, mask[:-1,:])
+        descriptor[1:, :-1, 10] = np.logical_xor(yd[1:,:-1], xd[:-1,1:])#, mask[:-1,1:])
+        descriptor[:, :-1, 11] = np.logical_xor(yd[:,:-1], xd[:,1:])#, mask[:,1:])
+        descriptor[:-1, :-1, 12] = np.logical_xor(yd[:-1,:-1], xd[1:,1:])#, mask[1:,1:])
+        descriptor[:-1, :, 13] = np.logical_xor(yd[:-1,:], xd[1:,:])#, mask[1:,:])
+        descriptor[:-1, 1:, 14] = np.logical_xor(yd[:-1,1:], xd[1:,:-1])#, mask[1:,:-1])
+        descriptor[:, 1:, 15] = np.logical_xor(yd[:,1:], xd[:,:-1])#, mask[:,:-1])
         
         # Adjust the mask to exclude pixels where the full 8-vector could not be 
         # calculated (for a rectangle this is the outer rows and columns)
