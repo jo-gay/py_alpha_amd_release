@@ -84,7 +84,7 @@ def getNextSRPair(folder, verbose=False):
     paths and also the sample and region ids
     """
 #    pattern = re.compile("^([0-9]+)_([0-9]+)_mpm_.*$")
-    pattern = re.compile("^psr_shg_([0-9a-zA-Z]+)_([0-9]+).tif$")
+    pattern = re.compile("^([0-9a-zA-Z]+)_([0-9]+)_shg_psr.png$")
     (_, _, files) = next(os.walk(folder))
     for f in files:
         m = pattern.match(f)
@@ -116,16 +116,18 @@ def getNextMPMPair(verbose=False, server=False, norm=False, blur=0.0):
     shg_pattern = re.compile("^([0-9]+)-shg.tif$", re.IGNORECASE)
     if server:
         folder = server_separate_mpm_folder
+        subdirs = ['Dysplastic Tissue/', 'Malignant Tissue/', 'Healthy Tissue/']
     else:
         folder = local_separate_mpm_folder
-        
-    subdirs = ['Dysplastic/', 'Malignant/', 'Healthy/']
+        subdirs = ['Dysplastic/', 'Malignant/', 'Healthy/']
 
     for sd in subdirs:
         (_, slidedirs, _) = next(os.walk(folder+sd)) #get list of subdirs within this one
-
         for slide in slidedirs:
             full_path = folder + sd + slide + '/med/'
+            if verbose:
+                print(f'Processing files in directory {full_path}')
+
             (_, _, files) = next(os.walk(full_path)) #get list of files within this folder
 
             for f in files:
@@ -323,14 +325,14 @@ def register_pairs(server=False):
 #    modelparams = {'mutual_info_fun':'norm'}
 
     optname = 'gridsearch' #['sgd', 'adam', 'gridsearch', 'scipy']
-#    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.02}
-    optparams = {'bounds':gridBounds(id_trans, 0.05, 5, 10), 'steps':11}
-#    optparams = {'gradient_magnitude_threshold':1e-6}
+#    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.02} #scipy
+    optparams = {'bounds':gridBounds(id_trans, 0.05, 5, 10), 'steps':11} #gridsearch
+#    optparams = {'gradient_magnitude_threshold':1e-6} #adam, sgd
     
     norm = True
-    blur = 0.0
-    skip = 4 #25 #manual way to skip pairs that have already been processed
-    results_file = 'PartIII_test2.csv'
+    blur = 3.0
+    skip = 0 #25 #manual way to skip pairs that have already been processed
+    results_file = 'PartIII_test1_3_v1.csv'
     limit = 200
     ##### End running parameters #####
 
@@ -355,8 +357,7 @@ def register_pairs(server=False):
     
 #    for slide, roi_idx, ref_path, flo_path in getNextSRPair(folder):
 #    for slide, roi_idx, mpm_path, al_path in getNextPair():
-    ####SWAPPED REF & FLO
-    for slide, roi_idx, flo_im, ref_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
+    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
         # Take the next random transform
         rndTrans = rndTransforms.pop()
 
@@ -368,8 +369,8 @@ def register_pairs(server=False):
         if limit < 0:
             break
         # Open and prepare the images: if using SRs then don't normalize (or do?)
-#        ref_im, ref_im_orig = preProcessImageAndCopy(ref_path, norm=False, blur=0.0)
-#        flo_im, flo_im_orig = preProcessImageAndCopy(flo_path, norm=False, blur=0.0)
+#        ref_im, ref_im_orig = preProcessImageAndCopy(ref_path, norm=norm, blur=blur)
+#        flo_im, flo_im_orig = preProcessImageAndCopy(flo_path, norm=norm, blur=blur)
 #        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
 #        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
         #If aligning SHG + TPEF, keep a copy of the TPEF (floating) for later
@@ -418,7 +419,7 @@ def register_pairs(server=False):
 
         
 #        #Grid search
-        reg.add_initial_transform(id_trans)
+#        reg.add_initial_transform(id_trans)
         
         #All except alphaAMD
         # There is no evidence so far, that pyramid levels lead the search towards the MI maximum.
@@ -431,14 +432,13 @@ def register_pairs(server=False):
 #        reg.set_sampling_fraction(0.1)
 #        reg.set_iterations(3000)
 #
-#        #Scipy and AlphaAMD
-#        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
-#        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
-#        diag = 2.0/diag
-##        p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
-#        p_scaling = np.array([diag, diag, 1.0, 1.0])
-##        p_scaling = np.array([1.0, 100.0, 1.0/diag, 1.0/diag])
-#        reg.add_initial_transform(id_trans, param_scaling=p_scaling)
+        #Scipy and AlphaAMD
+        # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
+        diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
+        diag = 2.0/diag
+#        p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
+        p_scaling = np.array([diag, diag, 1.0, 1.0])
+        reg.add_initial_transform(id_trans, param_scaling=p_scaling)
 
 #        # in addition to the ID transform, add a bunch of random starting points
 #        add_multiple_startpts(reg, count=20, p_scaling=p_scaling)
@@ -534,26 +534,25 @@ def register_pairs(server=False):
 
 
 def create_surface(server=False):
-    limit = 1
     
     id_trans = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
                                           transforms.Rigid2DTransform()])
     
     ##### Running parameters to update each time #####
-    modelname = 'dLDP' #['alphaAMD', 'MI', 'SSD', 'dLDP']
-    modelparams = {}
+    modelname = 'dLDP' #Choose from ['alphaAMD', 'MI', 'SSD', 'dLDP']
+    modelparams = {'interpolation':'nearest'}
 #    modelparams = {'alpha_levels':7, 'symmetric_measure':True, 'squared_measure':False}
 #    modelparams = {'mutual_info_fun':'norm'}
 
-    optname = 'gridsearch' #['sgd', 'adam', 'gridsearch', 'scipy']
+    optname = 'gridsearch' #Choose from ['sgd', 'adam', 'gridsearch', 'scipy']
 #    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.02}
-    optparams = {'bounds':gridBounds(id_trans, 0, 0, 10), 'steps':[1,1,81,81]}
+    optparams = {'bounds':gridBounds(id_trans, 0.05, 5, 0), 'steps':[1,1,41,41]}
 #    optparams = {'gradient_magnitude_threshold':1e-6}
     
     norm = True
     blur = 3.0
 #    results_file = 'PartIII_test2.csv'
-    limit = 5
+    limit = 3
     ##### End running parameters #####
     
     
@@ -565,6 +564,7 @@ def create_surface(server=False):
 #        ref_im, ref_im_orig = preProcessImageAndCopy(al_path)
 #        flo_im, flo_im_orig = preProcessImageAndCopy(mpm_path)
 
+        print("Creating %s surface for sample %s, region %s"%(modelname, slide, roi_idx))
         reg = Register(2)
         reg.set_model(modelname, **modelparams)
 
@@ -604,28 +604,37 @@ def create_surface(server=False):
         values = np.array(reg.get_value_history(0, 0))
 
         if True: #Show 2d surface
-            npts = optparams['steps'][-1]
-            values.resize((npts,npts))
-            gridpts = np.linspace(*optparams['bounds'][2], npts)
+            axes = [2,3]
+            values.resize([optparams['steps'][a] for a in axes])
+            gridpts = [np.linspace(*optparams['bounds'][i], optparams['steps'][i]) \
+                       for i in range(len(optparams['bounds']))]
             
-            min_loc = list(reversed(np.unravel_index(np.argmin(values), \
-                                         values.shape)))
-            min_loc = np.linspace(gridpts[0], gridpts[-1], npts)[min_loc]
-            plt.figure(figsize=(10,8))
-#            plt.contourf(np.linspace(0.8, 1.2, pts), np.linspace(-0.25*np.pi, 0.25*np.pi, pts), values)
-#            plt.contourf(gridpts, gridpts, values)
-            plt.imshow(values, extent=[gridpts[0], gridpts[-1], gridpts[0], gridpts[-1]], \
-                       origin='lower', cmap='inferno_r')
-            plt.title("LDP surface at different translations using\n" \
-                      +"correct scale and rotation "\
-                      +"(smoothed images)")
-            plt.colorbar()
-            plt.annotate('Min=%.4f at (%.1f, %.1f)'%(np.min(values),*min_loc), xy=min_loc, xycoords='data',
-             xytext=(0.6, 0.04), textcoords='figure fraction',
-             arrowprops=dict(arrowstyle="->"))
+            #Convert radians to degrees for display
+            gridpts[1] *= 180/np.pi
 
-#            plt.xlabel('Scale')
-#            plt.ylabel('Rotation')
+            #Determine what aspect is needed for a square image
+            aspect = (gridpts[axes[1]][-1]-gridpts[axes[1]][0])/(gridpts[axes[0]][-1]-gridpts[axes[0]][0])
+            
+            min_loc = np.unravel_index(np.argmin(values), values.shape)
+            min_loc = [gridpts[i][min_loc[idx]] for idx, i in enumerate(axes)]
+            plt.figure(figsize=(10,10))
+            ax = plt.gca()
+            im = ax.imshow(values, extent=[gridpts[axes[1]][0], gridpts[axes[1]][-1], \
+                                       gridpts[axes[0]][0], gridpts[axes[0]][-1]], \
+                       origin='lower', aspect=aspect, cmap='inferno_r')
+            plt.colorbar(im, fraction=0.046, pad=0.04)
+#            plt.title("dLDP surface as scale and rotation change\n" \
+#                      +"(translation fixed at zero, image smoothed)")
+            plt.title("dLDP surface as translation changes\n" \
+                      +"(scale 1.0, rotation 0, image smoothed)")
+            min_loc = list(reversed(min_loc))
+            plt.annotate('Min=%.4f at (%.1f, %.1f)'%(np.min(values),*min_loc), xy=min_loc, xycoords='data',
+                         xytext=(0.6, 0.04), textcoords='figure fraction',
+                         arrowprops=dict(arrowstyle="->"))
+
+            axisnames=['Scale (%)', 'Rotation (degrees)', 'x translation (px)', 'y translation (px)']
+            plt.xlabel(axisnames[axes[1]])
+            plt.ylabel(axisnames[axes[0]])
             plt.show()
 
         

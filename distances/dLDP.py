@@ -201,6 +201,24 @@ def padded_neighbour_xor(image, direction, padvalue=0):
         
     return ret
 
+def neighbour_deriv_signs(d1, d2):
+    """Given two derivative images, compare the sign of each pixel in the first image
+    with the signs of the derivatives of its neighbours in the second image.
+    
+    Return 8-bit descriptor for each pixel where 1 indicates different signs.
+    """
+    descriptor = np.zeros((*d1.shape, 8), dtype='int') - 1
+    descriptor[1:, 1:, 0] = np.logical_xor(d1[1:,1:], d2[:-1,:-1])#, mask[:-1,:-1])
+    descriptor[1:, :, 1] = np.logical_xor(d1[1:,:], d2[:-1,:])#, mask[:-1,:])
+    descriptor[1:, :-1, 2] = np.logical_xor(d1[1:,:-1], d2[:-1,1:])#, mask[:-1,1:])
+    descriptor[:, :-1, 3] = np.logical_xor(d1[:,:-1], d2[:,1:])#, mask[:,1:])
+    descriptor[:-1, :-1, 4] = np.logical_xor(d1[:-1,:-1], d2[1:,1:])#, mask[1:,1:])
+    descriptor[:-1, :, 5] = np.logical_xor(d1[:-1,:], d2[1:,:])#, mask[1:,:])
+    descriptor[:-1, 1:, 6] = np.logical_xor(d1[:-1,1:], d2[1:,:-1])#, mask[1:,:-1])
+    descriptor[:, 1:, 7] = np.logical_xor(d1[:,1:], d2[:,:-1])#, mask[:,:-1])
+    return descriptor
+
+
 class dLDPDistance:
     def __init__(self, mode='diff', interpolation='nearest'):
         """Set up the SSD measure.
@@ -317,15 +335,13 @@ class dLDPDistance:
         if mask is None:
             mask = np.ones(image.shape, dtype='bool')
 
-        #Calculate derivatives in both directions
-        xd = x_deriv(image, self.diff_mode)
-        yd = y_deriv(image, self.diff_mode)
-        
+        #Calculate derivatives in four directions.
         #Not interested in the actual values, just the signs. convert to true/false,
         #where true corresponds to a positive derivative
-        xd = xd >= 0
-        yd = yd >= 0
-
+        derivs=[]
+        for d in range(4):
+            derivs.append(deriv(image, d+1) >= 0)
+        
         #mask out the first and last row and column as we don't have derivatives for these
         mask[0,:] = False
         mask[:,0] = False
@@ -336,31 +352,19 @@ class dLDPDistance:
         #not compare a pixel with a neighbour outside the mask.
         mask = extend_mask(mask, pixels=1)
         
-        descriptor = np.zeros((*image.shape, 16), dtype='int') - 1
         
-        # For each of the 8 directions, starting from above left and going clockwise,
-        # determine whether the x derivative at the central pixel has the same sign 
-        # as the y derivative of its neighbour,
+        # For each pair of directions, 
+        # check whether the derivative at the central pixel has the same sign 
+        # as the other derivative of each of its neighbours,
         # and save these results into the descriptor
-        descriptor[1:, 1:, 0] = np.logical_xor(xd[1:,1:], yd[:-1,:-1])#, mask[:-1,:-1])
-        descriptor[1:, :, 1] = np.logical_xor(xd[1:,:], yd[:-1,:])#, mask[:-1,:])
-        descriptor[1:, :-1, 2] = np.logical_xor(xd[1:,:-1], yd[:-1,1:])#, mask[:-1,1:])
-        descriptor[:, :-1, 3] = np.logical_xor(xd[:,:-1], yd[:,1:])#, mask[:,1:])
-        descriptor[:-1, :-1, 4] = np.logical_xor(xd[:-1,:-1], yd[1:,1:])#, mask[1:,1:])
-        descriptor[:-1, :, 5] = np.logical_xor(xd[:-1,:], yd[1:,:])#, mask[1:,:])
-        descriptor[:-1, 1:, 6] = np.logical_xor(xd[:-1,1:], yd[1:,:-1])#, mask[1:,:-1])
-        descriptor[:, 1:, 7] = np.logical_xor(xd[:,1:], yd[:,:-1])#, mask[:,:-1])
-        
-        # Now do the same but using the y derivative of the central pixel vs x 
-        # derivatives of neighbours
-        descriptor[1:, 1:, 8] = np.logical_xor(yd[1:,1:], xd[:-1,:-1])#, mask[:-1,:-1])
-        descriptor[1:, :, 9] = np.logical_xor(yd[1:,:], xd[:-1,:])#, mask[:-1,:])
-        descriptor[1:, :-1, 10] = np.logical_xor(yd[1:,:-1], xd[:-1,1:])#, mask[:-1,1:])
-        descriptor[:, :-1, 11] = np.logical_xor(yd[:,:-1], xd[:,1:])#, mask[:,1:])
-        descriptor[:-1, :-1, 12] = np.logical_xor(yd[:-1,:-1], xd[1:,1:])#, mask[1:,1:])
-        descriptor[:-1, :, 13] = np.logical_xor(yd[:-1,:], xd[1:,:])#, mask[1:,:])
-        descriptor[:-1, 1:, 14] = np.logical_xor(yd[:-1,1:], xd[1:,:-1])#, mask[1:,:-1])
-        descriptor[:, 1:, 15] = np.logical_xor(yd[:,1:], xd[:,:-1])#, mask[:,:-1])
+        descriptor=[]
+        for i in range(3):
+            for j in range(i+1,4):
+                descriptor.append(neighbour_deriv_signs(derivs[i], derivs[j]))
+        descriptor = np.asarray(descriptor)
+        #Now descriptor shape is (6,m,n,8)
+        descriptor = np.rollaxis(descriptor, 0, 3)
+        descriptor = descriptor.reshape((*descriptor.shape[:2], -1))
         
         # Adjust the mask to exclude pixels where the full 8-vector could not be 
         # calculated (for a rectangle this is the outer rows and columns)
@@ -388,7 +392,7 @@ class dLDPDistance:
             self.ref_mask = np.ones(self.ref_image.shape, 'bool')
         
         #TODO: change back to dLDP
-        self.ref_dLDP, self.ref_mask = self.create_LDP(self.ref_image, self.ref_mask)
+        self.ref_dLDP, self.ref_mask = self.create_dLDP(self.ref_image, self.ref_mask)
         
         if False:
             im0 = self.dLDP_as_image(self.ref_dLDP[...,:8])
@@ -490,7 +494,7 @@ class dLDPDistance:
             return np.inf, None
         
         #TODO: turn back to dLDP
-        warped_image_dLDP, warped_mask = self.create_LDP(warped_image, warped_mask)
+        warped_image_dLDP, warped_mask = self.create_dLDP(warped_image, warped_mask)
 
         value = self.dLDPdist(self.ref_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
                             warped_image_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)])
