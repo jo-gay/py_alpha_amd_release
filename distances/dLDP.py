@@ -493,7 +493,7 @@ class dLDPDistance:
         if len(warped_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)]) < 0.4*np.prod(self.flo_image.shape): #too small an overlap, skip it.
             return np.inf, None
         
-        #TODO: turn back to dLDP
+        #TODO: Make a way to change between 8-bit and 48-bit dLDP and LDP
         warped_image_dLDP, warped_mask = self.create_dLDP(warped_image, warped_mask)
 
         value = self.dLDPdist(self.ref_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \

@@ -46,8 +46,8 @@ from distances import dLDPDistance
 # Import transforms and filters
 import filters, transforms
 
-available_opts = ['adam', 'sgd', 'scipy', 'gridsearch']
-available_models = ['alphaamd', 'mi', 'ssd', 'dldp']
+available_opts = ['adam', 'gd', 'bfgs', 'gridsearch']
+available_models = ['alphaamd', 'mi', 'mse', 'dldp']
 
 class Register:
     """Operate one of the available registration algorithms, using a pyramid scheme.
@@ -223,7 +223,7 @@ class Register:
             self._make_dist_measure = self._make_alphaAMD_dist_measure
         elif self.model_name == 'mi':
             self._make_dist_measure = self._make_mi_dist_measure
-        elif self.model_name == 'ssd':
+        elif self.model_name == 'mse':
             self._make_dist_measure = self._make_ssd_dist_measure
         elif self.model_name == 'dldp':
             self._make_dist_measure = self._make_dldp_dist_measure
@@ -453,21 +453,13 @@ class Register:
         if self.opt_name == 'adam':
             opt = AdamOptimizer(self.distances[lvl_it], init_transform.copy())
             opt.set_gradient_magnitude_threshold(self.opt_opts.get('gradient_magnitude_threshold', 1e-6))
-        elif self.opt_name == 'sgd':
+        elif self.opt_name == 'gd':
             opt = GradientDescentOptimizer(self.distances[lvl_it], init_transform.copy())
             opt.set_gradient_magnitude_threshold(self.opt_opts.get('gradient_magnitude_threshold', 1e-6))
-        elif self.opt_name == 'scipy':
+        elif self.opt_name == 'bfgs':
             opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
             minim_opts = {'gtol': self.opt_opts.get('gradient_magnitude_threshold', 1e-9), \
                           'eps': self.opt_opts.get('epsilon', 0.1)}
-#            #For lower resolutions (earlier levels in the pyramid) use smaller steps to avoid
-#            #translating too far. Also use a larger gradient tolerance as we don't need high 
-#            #accuracy before the final level
-#            minim_opts = {'gtol': self.opt_opts['gradient_magnitude_threshold']*np.power(self.pyramid_factors[lvl_it], 2), \
-#                          'eps': 0.02/self.pyramid_factors[lvl_it]}
-#            minim_opts = {'xatol': 1e-1, \
-#                          'ftol': 1e-6}
-#            opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='Nelder-Mead')
             opt.set_minimizer_options(minim_opts)
         elif self.opt_name == 'gridsearch':
             opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), \
@@ -510,7 +502,7 @@ class Register:
             init_transform = self.initial_transforms[t_it]
 
             self.value_history.append([])
-            if self.opt_name == 'scipy':
+            if self.opt_name == 'bfgs':
                 self.flags.append([])
 
             for lvl_it in range(pyramid_level_count):
@@ -533,7 +525,7 @@ class Register:
                     init_transform = opt.get_transform()
 
                 self.value_history[-1].append(opt.get_value_history())
-                if self.opt_name == 'scipy':
+                if self.opt_name == 'bfgs':
                     self.flags[-1].append(opt.success)
                 if verbose:
                     print(f'Pyramid level {lvl_it} terminating at [' + \

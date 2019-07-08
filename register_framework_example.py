@@ -56,7 +56,7 @@ param_iterations = 3000
 # The fraction of the points to sample randomly (0.0-1.0)
 param_sampling_fraction = 0.1
 # Number of iterations between each printed output (with current distance/gradient/parameters)
-param_report_freq = 50
+param_report_freq = 500
 
 # Directory to save output files - any existing files will be overwritten
 outdir = './test_images/output/'
@@ -105,10 +105,10 @@ def main():
     reg.add_pyramid_level(1, 0.0)
 
     # Choose an optimizer and set optimizer-specific parameters
-    # For SGD and adam, learning-rate / Step lengths given by [[start1, end1], [start2, end2] ...] (for each pyramid level)
-    reg.set_optimizer('sgd', \
+    # For GD and adam, learning-rate / Step lengths given by [[start1, end1], [start2, end2] ...] (for each pyramid level)
+    reg.set_optimizer('gd', \
                       step_lengths=np.array([[1., 1.], [1., 0.5], [0.5, 0.1]]), \
-                      gradient_magnitude_threshold=0.001, \
+                      gradient_magnitude_threshold=0.0001, \
                       iterations=param_iterations
                       )
 #    reg.set_optimizer('scipy', \
