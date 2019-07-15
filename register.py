@@ -356,7 +356,8 @@ class Register:
 
     def _make_dldp_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_mask_resampled, flo_weights, pyramid_factor):
-        dist = dLDPDistance(self.model_opts.get('derivative_mode', 'diff'))
+        dist = dLDPDistance(mode=self.model_opts.get('derivative_mode', 'difference'), \
+                            version=self.model_opts.get('version', 'dLDP_8'))
         dist.set_ref_image(ref_resampled, mask=ref_mask_resampled)
         dist.set_flo_image(flo_resampled)
 
