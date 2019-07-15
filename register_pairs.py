@@ -95,8 +95,8 @@ def getNextSRPair(folder, server=False, norm=True, blur=3.0, verbose=False, orde
             yield slide, region, shg_im, tpef_im
     else:
 #        pattern = re.compile("^([0-9]+)_([0-9]+)_mpm_.*$") #for combined MPM and BF files
-        pattern = re.compile("^psr_shg_([0-9a-zA-Z]+)_([0-9]+).tif$") #for v1 SHG and TPEF files with blur=3 and cs diff for shg vs tpef
-#        pattern = re.compile("^([0-9a-zA-Z]+)_([0-9]+)_shg_psr.png$") #for v2 SHG and TPEF files with blur=3 and c1=c2=0.1 for both
+#        pattern = re.compile("^psr_shg_([0-9a-zA-Z]+)_([0-9]+).tif$") #for v1 SHG and TPEF files with blur=3 and cs diff for shg vs tpef
+        pattern = re.compile("^([0-9a-zA-Z]+)_([0-9]+)_shg_psr.png$") #for v2 SHG and TPEF files with blur=3 and c1=c2=0.1 for both
 #        pattern = re.compile("^([0-9a-zA-Z]+)_([0-9]+)_shg_psr_blur5.png$") #for individual SHG and TPEF files with blur=5 and c1=c2=0.1 for both
         (_, _, files) = next(os.walk(folder))
         for f in files:
@@ -123,8 +123,8 @@ def getNextSRPair(folder, server=False, norm=True, blur=3.0, verbose=False, orde
 def getSRPair(folder, slide, region, verbose=False):
     """Get specified pair of images from specified structural representations folder.
     """
-    shg_path = folder+f"psr_shg_{slide}_{region}.tif" #old blur=3.0, c=0.1/0.2 files (v1)
-#    shg_path = folder+f"{slide}_{region}_shg_psr.png" #new blur=3.0, c=0.1 files (v2)
+#    shg_path = folder+f"psr_shg_{slide}_{region}.tif" #old blur=3.0, c=0.1/0.2 files (v1)
+    shg_path = folder+f"{slide}_{region}_shg_psr.png" #new blur=3.0, c=0.1 files (v2)
 #    shg_path = folder+f"{slide}_{region}_shg_psr_blur5.png" #new blur=5.0, c=0.1 files (v3)
     tpef_path = shg_path.replace('shg', 'tpef')
     if os.path.isfile(shg_path) and os.path.isfile(tpef_path):
@@ -194,7 +194,7 @@ def getNextMPMPair(verbose=False, server=False, norm=False, blur=0.0, load=True,
     # Finished going through the files so end the generator
     return
                     
-def getRandomTransform(maxRot=10, maxScale=1.15, maxTrans=8):
+def getRandomTransform(maxRot=10, maxScale=1.15, maxTrans=20):
     """
     Choose a random 2D transform (scale, rotation, and translation in two directions, where scale is a single value 
     applied in both x and y dimensions). Max rotation given in degrees (in either direction). Max translation in
@@ -357,20 +357,21 @@ def register_pairs(server=False):
                                           transforms.Rigid2DTransform()])
     
     ##### Running parameters to update each time #####
-    modelname = 'mi' #['alphaAMD', 'MI', 'MSE', 'dLDP']
+    modelname = 'dLDP' #['alphaAMD', 'MI', 'MSE', 'dLDP']
 #    modelparams = {} #mse
+    modelparams = {'version':'dLDP_48'} #dLDP versions: dLDP_8, dLDP_48, LDP
 #    modelparams = {'alpha_levels':7, 'symmetric_measure':True, 'squared_measure':False}
-    modelparams = {'mutual_info_fun':'norm'}
+#    modelparams = {'mutual_info_fun':'norm'}
 
-    optname = 'gridsearch' #['gd', 'adam', 'gridsearch', 'bfgs']
-#    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.1} #bfgs
-    optparams = {'bounds':gridBounds(id_trans, 0.05, 5, 10), 'steps':11} #gridsearch
+    optname = 'bfgs' #['gd', 'adam', 'gridsearch', 'bfgs']
+    optparams = {'gradient_magnitude_threshold':1e-9, 'epsilon':0.05} #bfgs
+#    optparams = {'bounds':gridBounds(id_trans, 0.05, 5, 10), 'steps':11} #gridsearch
 #    optparams = {'gradient_magnitude_threshold':1e-6} #adam, gd
     
     norm = True
     blur = 3.0
-    skip = 3 #25 #manual way to skip pairs that have already been processed
-    results_file = 'PartII_test1.3.csv'
+    skip = 0 #5 #manual way to skip pairs that have already been processed
+    results_file = 'PartIII_test5.10_48bit.csv'
     limit = 25-skip
     ##### End running parameters #####
 
@@ -394,9 +395,9 @@ def register_pairs(server=False):
     #OPTION: Starting from gridmax already found
 #    grid_params = get_MI_gridmax(local_separate_mpm_folder+'PartI_test4.csv')
     
-    for slide, roi_idx, ref_im, flo_im in getNextSRPair(folder, order=True, verbose=True, server=server, norm=norm, blur=blur):
+#    for slide, roi_idx, ref_im, flo_im in getNextSRPair(folder, order=True, verbose=True, server=server, norm=norm, blur=blur):
 #    for slide, roi_idx, mpm_path, al_path in getNextPair():
-#    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
+    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
         # Take the next random transform
         rndTrans = rndTransforms.pop()
 
@@ -457,13 +458,13 @@ def register_pairs(server=False):
 
 
         ## Add pyramid levels
-        if modelname == 'alphaamd':
+        if modelname.lower() == 'alphaamd':
             # Learning-rate / Step lengths [[start1, end1], [start2, end2] ...] (for each pyramid level)
             step_lengths = np.array([[1., 1.], [1., 0.5], [0.5, 0.1]])
             reg.set_step_lengths(step_lengths)
             reg.add_pyramid_levels(factors=[4, 2, 1], sigmas=[5.0, 3.0, 0.0])
             reg.set_sampling_fraction(0.5) #very patchy with 0.1, also tried 0.25
-            reg.set_iterations(3000)
+            reg.set_iterations(5000)
 
         else:
             # I have seen no evidence so far, that pyramid levels lead the search towards the MI maximum.
@@ -472,19 +473,19 @@ def register_pairs(server=False):
 #            reg.add_pyramid_levels(factors=[1,1], sigmas=[5.0,0.0])
 
         ## Add initial transform(s), with parameter scaling if required
-        if modelname == 'gridsearch':
+        if optname.lower() == 'gridsearch':
             reg.add_initial_transform(id_trans)
         else:
             #BFGS and AlphaAMD
             # Estimate an appropriate parameter scaling based on the sizes of the images (not used in grid search).
             diag = transforms.image_diagonal(ref_im) + transforms.image_diagonal(flo_im)
             diag = 2.0/diag
-            p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
-    #        p_scaling = np.array([diag*20., diag*20., 1.0, 1.0])
+#            p_scaling = np.array([diag*100, diag*100, 5.0, 5.0])
+            p_scaling = np.array([diag*2.0, diag*2.0, 1.0, 1.0])
             reg.add_initial_transform(id_trans, param_scaling=p_scaling)
     
-#            #OPTION: in addition to the ID transform, add a bunch of random starting points
-#            add_multiple_startpts(reg, count=20, p_scaling=p_scaling)
+            #OPTION: in addition to the ID transform, add a bunch of random starting points
+            add_multiple_startpts(reg, count=20, p_scaling=p_scaling)
 
 #            #OPTION: Starting from gridmax already found
 #            if not (slide, roi_idx) in grid_params:
@@ -499,7 +500,7 @@ def register_pairs(server=False):
 #            reg.add_initial_transform(starting_trans, param_scaling=p_scaling)
 
 
-        reg.set_report_freq(500)
+        reg.set_report_freq(250)
     
         # Create output directory
         directory = os.path.dirname("./tmp/")
@@ -674,9 +675,10 @@ def create_surface(server=False):
 #    init_t = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), rigT])
     
     ##### Running parameters to update each time #####
-    modelname = 'alphaAMD' #Choose from ['alphaAMD', 'MI', 'MSE', 'dLDP']
+    modelname = 'dLDP' #Choose from ['alphaAMD', 'MI', 'MSE', 'dLDP']
 #    modelparams = {}
-    modelparams = {'alpha_levels':7, 'symmetric_measure':True, 'squared_measure':False}
+    modelparams = {'version':'dLDP_48'} #dLDP versions: dLDP_8, dLDP_48, LDP
+#    modelparams = {'alpha_levels':7, 'symmetric_measure':True, 'squared_measure':False}
 #    modelparams = {'mutual_info_fun':'norm'}
 
     optname = 'gridsearch' #Choose from ['gd', 'adam', 'gridsearch', 'bfgs']
@@ -687,14 +689,14 @@ def create_surface(server=False):
     norm = True
     blur = 0.0
     skip = 24
-    limit = 3
+    limit = 1
     folder = local_sr_folder
 
 
     ##### End running parameters #####
     
-    for slide, roi_idx, ref_im, flo_im in getNextSRPair(folder, order=True, verbose=True, server=server, norm=norm, blur=blur):
-#    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
+#    for slide, roi_idx, ref_im, flo_im in getNextSRPair(folder, order=True, verbose=True, server=server, norm=norm, blur=blur):
+    for slide, roi_idx, ref_im, flo_im in getNextMPMPair(verbose=True, server=server, norm=norm, blur=blur):
 #    slide = 'cilia'
 #    roi_idx = 'none'
 #    ref_im, _ = OpenAndPreProcessImage('./test_images/reference_example.png', norm=norm, blur=blur, copyOrig=False)
@@ -788,8 +790,8 @@ if __name__ == '__main__':
     server_paths = False
     if len(sys.argv) > 1:
         server_paths = True
-#    register_pairs(server_paths)
-    create_surface(server_paths)
+    register_pairs(server_paths)
+#    create_surface(server_paths)
 #    create_dLDP_illustration()
     end_time = time.time()
     print("Elapsed time: %.1f seconds"%(end_time-start_time))

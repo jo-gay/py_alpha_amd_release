@@ -33,7 +33,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 
-def x_deriv(image, mode='diff', sigma=3.0):
+def x_deriv(image, mode='difference', sigma=3.0):
     """Calculate the derivative in the x direction for each pixel in
     the given image.
     
@@ -41,19 +41,19 @@ def x_deriv(image, mode='diff', sigma=3.0):
 
     Arguments:
         image: should be provided as a 2D ndarray. Indexing is in y, x order
-        mode: one of 'diff' or 'gaussian'. Diff returns the left finite difference
+        mode: one of 'difference' or 'gaussian'. Diff returns the left finite difference
               while Gaussian uses a gaussian filter for a smoother result
         sigma: parameter for gaussian derivative
 
     Returns:
         2D ndarray of derivatives, same shape as image. Final column is zeros.
     """
-    if mode == 'diff':
+    if mode == 'difference':
         return np.pad(image[...,:-1] - image[...,1:], ((0,0),(0,1)), mode='constant')
     
     raise NotImplementedError('Gaussian derivatives not yet implemented')
 
-def y_deriv(image, mode='diff', sigma=3.0):
+def y_deriv(image, mode='difference', sigma=3.0):
     """Calculate the derivative in the y direction for each pixel in
     the given image.
     
@@ -62,26 +62,25 @@ def y_deriv(image, mode='diff', sigma=3.0):
 
     Arguments:
         image: should be provided as a 2D ndarray. Indexing is in y, x order
-        mode: one of 'diff' or 'gaussian'. Diff returns the left finite difference
+        mode: one of 'difference' or 'gaussian'. Diff returns the left finite difference
               while Gaussian uses a gaussian filter for a smoother result
         sigma: parameter for gaussian derivative
 
     Returns:
         2D ndarray of derivatives, same shape as image. Final row is zeros.
     """
-    if mode == 'diff':
+    if mode == 'difference':
         return np.pad(image[:-1,...] - image[1:,...], ((0,1),(0,0)), mode='constant')
     raise NotImplementedError('Gaussian derivatives not yet implemented')
 
-def deriv(image, direction):
-    """Calculate the derivative in the given direction for each pixel in
+def deriv_sign(image, direction):
+    """Calculate the sign of the derivative in the given direction for each pixel in
     the given image.
     
     The derivative is calculated as I'(Z_0) = I(Z_0) - I(Z_x), i.e. the  
     finite difference where x is one of the neighbouring pixels, depending on the 
     direction specified. Method from Zhang et al "Local Derivative Pattern 
-    Versus Local Binary Pattern", but consider rescaling due to difference in distance
-    between pixels in 0 & 90 vs 45 & 135 directions.
+    Versus Local Binary Pattern".
 
     Arguments:
         image: should be provided as a 2D ndarray. Indexing is in y, x order
@@ -91,20 +90,23 @@ def deriv(image, direction):
                    3 => 135 degrees
 
     Returns:
-        2D ndarray of derivatives, same shape as image. Zeros where undefined
+        2D ndarray of derivative directions, same shape as image:
+            True where derivative is positive
+            False where derivative is negative
+            False where derivative is undefined due to edges.
     """
     if direction == 0:
-        diff = image[:, :-1] - image[:, 1:]
+        diff = (image[:, :-1] - image[:, 1:]) >= 0
         diff = np.pad(diff, ((0,0),(0,1)), mode='constant')
     elif direction == 1:
-        diff = image[:-1, :-1] - image[1:, 1:]
-        diff = np.pad(diff, ((0,1),(0,1)), mode='constant')
+        diff = (image[1:, :-1] - image[:-1, 1:]) >= 0
+        diff = np.pad(diff, ((1,0),(0,1)), mode='constant')
     elif direction == 2:
-        diff = image[:-1, :] - image[1:, :]
-        diff = np.pad(diff, ((0,1),(0,0)), mode='constant')
+        diff = (image[1:, :] - image[:-1, :]) >= 0
+        diff = np.pad(diff, ((1,0),(0,0)), mode='constant')
     else:
-        diff = image[:-1, 1:] - image[1:, :-1]
-        diff = np.pad(diff, ((0,1),(1,0)), mode='constant')
+        diff = (image[1:, 1:] - image[:-1, :-1]) >= 0
+        diff = np.pad(diff, ((1,0),(1,0)), mode='constant')
         
     return diff
 
@@ -115,7 +117,7 @@ def deriv_4way(image):
     Returns:
         4-channel derivative image, with shape (*image.shape, 4)
     """
-    return np.stack([deriv(image, i) for i in range(4)], axis=-1)
+    return np.stack([deriv_sign(image, i) for i in range(4)], axis=-1)
 
 def masked_not_xor(region1, region2, mask):
     """ Given two image regions of the same size (2D ndarrays of booleans), and 
@@ -145,12 +147,18 @@ def extend_mask(mask, pixels=1):
     225 degrees, 315 degrees). Any pixel covered by the shifted mask will be masked.
     This will only work for a mask with relatively continuous areas masked out.
     """
-    newmask = mask.copy()
-    newmask[pixels:,pixels:] = np.logical_and(mask[pixels:,pixels:], mask[:-pixels,:-pixels])
-    newmask[:-pixels,pixels:] = np.logical_and(newmask[:-pixels,pixels:], mask[pixels:,:-pixels])
-    newmask[pixels:,:-pixels] = np.logical_and(newmask[pixels:,:-pixels], mask[:-pixels,pixels:])
-    newmask[:-pixels,:-pixels] = np.logical_and(newmask[:-pixels,:-pixels], mask[pixels:,pixels:])
-    return newmask
+    newmask = np.pad(mask, ((pixels,pixels),(pixels,pixels)), mode='constant')
+    p2 = 2*pixels
+    newmask[p2:,p2:] = np.logical_and(newmask[p2:,p2:], mask)
+    newmask[:-p2,p2:] = np.logical_and(newmask[:-p2,p2:], mask)
+    newmask[p2:,:-p2] = np.logical_and(newmask[p2:,:-p2], mask)
+    newmask[:-p2,:-p2] = np.logical_and(newmask[:-p2,:-p2], mask)
+    newmask[:p2,:]=0
+    newmask[-p2:,:]=0
+    newmask[:,:p2]=0
+    newmask[:,-p2:]=0
+    
+    return newmask[pixels:-pixels, pixels:-pixels]
 
 def binaryVectorToInt(v):
     """Convert a vector of 1s and 0s to an integer.
@@ -207,23 +215,91 @@ def neighbour_deriv_signs(d1, d2):
     
     Return 8-bit descriptor for each pixel where 1 indicates different signs.
     """
-    descriptor = np.zeros((*d1.shape, 8), dtype='int') - 1
-    descriptor[1:, 1:, 0] = np.logical_xor(d1[1:,1:], d2[:-1,:-1])#, mask[:-1,:-1])
-    descriptor[1:, :, 1] = np.logical_xor(d1[1:,:], d2[:-1,:])#, mask[:-1,:])
-    descriptor[1:, :-1, 2] = np.logical_xor(d1[1:,:-1], d2[:-1,1:])#, mask[:-1,1:])
-    descriptor[:, :-1, 3] = np.logical_xor(d1[:,:-1], d2[:,1:])#, mask[:,1:])
-    descriptor[:-1, :-1, 4] = np.logical_xor(d1[:-1,:-1], d2[1:,1:])#, mask[1:,1:])
-    descriptor[:-1, :, 5] = np.logical_xor(d1[:-1,:], d2[1:,:])#, mask[1:,:])
-    descriptor[:-1, 1:, 6] = np.logical_xor(d1[:-1,1:], d2[1:,:-1])#, mask[1:,:-1])
-    descriptor[:, 1:, 7] = np.logical_xor(d1[:,1:], d2[:,:-1])#, mask[:,:-1])
-    return descriptor
+#     descriptor = np.zeros((*d1.shape, 8), dtype='int') - 1
+#     descriptor[1:, 1:, 0] = np.logical_xor(d1[1:,1:], d2[:-1,:-1])#, mask[:-1,:-1])
+#     descriptor[1:, :, 1] = np.logical_xor(d1[1:,:], d2[:-1,:])#, mask[:-1,:])
+#     descriptor[1:, :-1, 2] = np.logical_xor(d1[1:,:-1], d2[:-1,1:])#, mask[:-1,1:])
+#     descriptor[:, :-1, 3] = np.logical_xor(d1[:,:-1], d2[:,1:])#, mask[:,1:])
+#     descriptor[:-1, :-1, 4] = np.logical_xor(d1[:-1,:-1], d2[1:,1:])#, mask[1:,1:])
+#     descriptor[:-1, :, 5] = np.logical_xor(d1[:-1,:], d2[1:,:])#, mask[1:,:])
+#     descriptor[:-1, 1:, 6] = np.logical_xor(d1[:-1,1:], d2[1:,:-1])#, mask[1:,:-1])
+#     descriptor[:, 1:, 7] = np.logical_xor(d1[:,1:], d2[:,:-1])#, mask[:,:-1])
+    
+#     descriptor = np.zeros((8, *d1.shape), dtype='int') - 1
+#     descriptor[0, 1:, 1:] = np.logical_xor(d1[1:,1:], d2[:-1,:-1])#, mask[:-1,:-1])
+#     descriptor[1, 1:, :] = np.logical_xor(d1[1:,:], d2[:-1,:])#, mask[:-1,:])
+#     descriptor[2, 1:, :-1] = np.logical_xor(d1[1:,:-1], d2[:-1,1:])#, mask[:-1,1:])
+#     descriptor[3, :, :-1] = np.logical_xor(d1[:,:-1], d2[:,1:])#, mask[:,1:])
+#     descriptor[4, :-1, :-1] = np.logical_xor(d1[:-1,:-1], d2[1:,1:])#, mask[1:,1:])
+#     descriptor[5, :-1, :] = np.logical_xor(d1[:-1,:], d2[1:,:])#, mask[1:,:])
+#     descriptor[6, :-1, 1:] = np.logical_xor(d1[:-1,1:], d2[1:,:-1])#, mask[1:,:-1])
+#     descriptor[7, :, 1:] = np.logical_xor(d1[:,1:], d2[:,:-1])#, mask[:,:-1])
+    
+#     descriptor = np.zeros((8, *d1.shape), dtype='int')
+#     descriptor[0] = np.pad(np.logical_xor(d1[1:,1:], d2[:-1,:-1]), ((1,0),(1,0)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[1] = np.pad(np.logical_xor(d1[1:,:], d2[:-1,:]), ((1,0),(0,0)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[2] = np.pad(np.logical_xor(d1[1:,:-1], d2[:-1,1:]), ((1,0),(0,1)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[3] = np.pad(np.logical_xor(d1[:,:-1], d2[:,1:]), ((0,0),(0,1)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[4] = np.pad(np.logical_xor(d1[:-1,:-1], d2[1:,1:]), ((0,1),(0,1)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[5] = np.pad(np.logical_xor(d1[:-1,:], d2[1:,:]), ((0,1),(0,0)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[6] = np.pad(np.logical_xor(d1[:-1,1:], d2[1:,:-1]), ((0,1),(1,0)), \
+#                            mode='constant', constant_values=-1)
+#     descriptor[7] = np.pad(np.logical_xor(d1[:,1:], d2[:,:-1]), ((0,0),(1,0)), \
+#                            mode='constant', constant_values=-1) 
+
+
+#     return descriptor
+
+
+    dshape = (8, d1.shape[0]+2, d1.shape[1]+2)
+    descriptor = np.zeros(dshape, dtype='bool')
+    
+    # pad the reference image with zeros all around
+    ref = np.pad(d1, ((1,1), (1,1)), mode='constant', constant_values=0)
+
+    descriptor[0] = np.logical_xor(ref, \
+                                   np.pad(d2, ((2,0),(2,0)), \
+                                          mode='constant', constant_values=0))
+    descriptor[1] = np.logical_xor(ref, \
+                                   np.pad(d2, ((2,0),(1,1)), \
+                                          mode='constant', constant_values=0))
+    descriptor[2] = np.logical_xor(ref, \
+                                   np.pad(d2, ((2,0),(0,2)), \
+                                          mode='constant', constant_values=0))
+    descriptor[3] = np.logical_xor(ref, \
+                                   np.pad(d2, ((1,1),(0,2)), \
+                                          mode='constant', constant_values=0))
+    descriptor[4] = np.logical_xor(ref, \
+                                   np.pad(d2, ((0,2),(0,2)), \
+                                          mode='constant', constant_values=0))
+    descriptor[5] = np.logical_xor(ref, \
+                                   np.pad(d2, ((0,2),(1,1)), \
+                                          mode='constant', constant_values=0))
+    descriptor[6] = np.logical_xor(ref, \
+                                   np.pad(d2, ((0,2),(2,0)), \
+                                          mode='constant', constant_values=0))
+    descriptor[7] = np.logical_xor(ref, \
+                                   np.pad(d2, ((1,1),(2,0)), \
+                                          mode='constant', constant_values=0))
+#     descriptor[:,1,:]=-1
+#     descriptor[:,-2,:]=-1
+#     descriptor[:,:,1]=-1
+#     descriptor[:,:,-2]=-1
+    return descriptor[:, 1:-1, 1:-1]
 
 
 class dLDPDistance:
-    def __init__(self, mode='diff', interpolation='nearest'):
+    def __init__(self, version='dLDP_8', mode='difference', interpolation='nearest'):
         """Set up the SSD measure.
         
         """
+        self.version = version
         self.ref_image = None
         self.flo_image = None
         self.ref_mask = None
@@ -325,52 +401,57 @@ class dLDPDistance:
                                      between the intensity at a pixel and that at its neighbour).
                    alterative 'gaussian' to be added TODO
         Returns:
-            dLDP descriptor: 16 element binary array for each pixel in the given image. 
+            dLDP descriptor: 8 or 48 element binary array for each pixel in the given image. 
                              Contains -1 where dLDP could not be calculated due to edge
                              of image or mask
             mask:            adjusted mask to exclude pixels for which the full 16 bit
                              descriptor could not be calculated
         """
         
+        if self.version.lower() == 'ldp':
+            return self.create_LDP(image, mask)
+        
         if mask is None:
             mask = np.ones(image.shape, dtype='bool')
-
-        #Calculate derivatives in four directions.
-        #Not interested in the actual values, just the signs. convert to true/false,
-        #where true corresponds to a positive derivative
-        derivs=[]
-        for d in range(4):
-            derivs.append(deriv(image, d+1) >= 0)
-        
-        #mask out the first and last row and column as we don't have derivatives for these
+    
+        #mask out the first row and first/last columns as we won't have derivatives in these posns
         mask[0,:] = False
         mask[:,0] = False
         mask[:,-1] = False
-        mask[-1,:] = False
-        
-        #Increase the masked out area by one pixel in each direction, so that we do
-        #not compare a pixel with a neighbour outside the mask.
+    #     mask[-1,:] = False
+    
+    #     #Increase the masked out area by one pixel in each direction, so that we do
+    #     #not compare a pixel with a neighbour outside the mask.
         mask = extend_mask(mask, pixels=1)
-        
-        
+    
+    
+        #Calculate derivatives in two/four directions
+        #Not interested in the actual values, just the signs. convert to true/false,
+        #where true corresponds to a positive derivative
+        derivs=[]
+        dirs = range(4)
+        comparisons = 6
+        if self.version.lower() == 'dldp_8':
+            dirs = [0, 2]
+            comparisons = 1
+        for d in dirs:
+            derivs.append(deriv_sign(image, d))
+    
         # For each pair of directions, 
         # check whether the derivative at the central pixel has the same sign 
         # as the other derivative of each of its neighbours,
         # and save these results into the descriptor
-        descriptor=[]
-        for i in range(3):
-            for j in range(i+1,4):
-                descriptor.append(neighbour_deriv_signs(derivs[i], derivs[j]))
-        descriptor = np.asarray(descriptor)
-        #Now descriptor shape is (6,m,n,8)
+        descriptor = np.zeros((comparisons, 8, *image.shape), dtype='bool')
+        c=0#counter
+        for idx, i in enumerate(derivs[:-1]):
+            for j in derivs[(idx+1):]:
+                descriptor[c] = neighbour_deriv_signs(i, j)
+                c += 1
+    
+        #Now descriptor shape is (1 or 6, 8, m, n). reshape to (m, n, 8 or 48)
+        descriptor = descriptor.reshape((-1, *descriptor.shape[2:]))
         descriptor = np.rollaxis(descriptor, 0, 3)
-        descriptor = descriptor.reshape((*descriptor.shape[:2], -1))
-        
-        # Adjust the mask to exclude pixels where the full 8-vector could not be 
-        # calculated (for a rectangle this is the outer rows and columns)
-        has_result = np.min(descriptor, axis=2) > -1
-        mask = np.logical_and(mask, has_result)
-        
+    
         return descriptor, mask
         
 
@@ -391,7 +472,6 @@ class dLDPDistance:
         if self.ref_mask is None or self.ref_mask.shape != self.ref_image.shape:
             self.ref_mask = np.ones(self.ref_image.shape, 'bool')
         
-        #TODO: change back to dLDP
         self.ref_dLDP, self.ref_mask = self.create_dLDP(self.ref_image, self.ref_mask)
         
         if False:
@@ -493,7 +573,6 @@ class dLDPDistance:
         if len(warped_image[np.logical_and(warped_mask > 0, self.ref_mask > 0)]) < 0.4*np.prod(self.flo_image.shape): #too small an overlap, skip it.
             return np.inf, None
         
-        #TODO: Make a way to change between 8-bit and 48-bit dLDP and LDP
         warped_image_dLDP, warped_mask = self.create_dLDP(warped_image, warped_mask)
 
         value = self.dLDPdist(self.ref_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
