@@ -52,9 +52,9 @@ symmetric_measure = True
 squared_measure = False
 
 # The number of iterations
-param_iterations = 3000
+param_iterations = 2000
 # The fraction of the points to sample randomly (0.0-1.0)
-param_sampling_fraction = 0.1
+param_sampling_fraction = 0.25
 # Number of iterations between each printed output (with current distance/gradient/parameters)
 param_report_freq = 500
 
@@ -106,13 +106,19 @@ def main():
 
     # Choose an optimizer and set optimizer-specific parameters
     # For GD and adam, learning-rate / Step lengths given by [[start1, end1], [start2, end2] ...] (for each pyramid level)
-    reg.set_optimizer('gd', \
-                      step_lengths=np.array([[1., 1.], [1., 0.5], [0.5, 0.1]]), \
-                      gradient_magnitude_threshold=0.0001, \
+    reg.set_optimizer('adam', \
+                      gradient_magnitude_threshold=0.01, \
                       iterations=param_iterations
                       )
-#    reg.set_optimizer('scipy', \
+#    reg.set_optimizer('gd', \
+#                      step_length=np.array([1., 0.5, 0.25]), \
+#                      end_step_length=np.array([0.4, 0.2, 0.01]), \
+#                      gradient_magnitude_threshold=0.01, \
 #                      iterations=param_iterations
+#                      )
+#    reg.set_optimizer('scipy', \
+#                      iterations=param_iterations, \
+#                      epsilon=0.001 \
 #                      )
 
     # Scale all transform parameters to approximately the same order of magnitude, based on sizes of images
@@ -121,11 +127,19 @@ def main():
     # Create the initial transform and add it to the registration framework 
     # (switch between affine/rigid transforms by commenting/uncommenting)
 #    # Affine
+#    initial_transform = transforms.AffineTransform(2)
 #    param_scaling = np.array([1.0/diag, 1.0/diag, 1.0/diag, 1.0/diag, 1.0, 1.0])
-#    reg.add_initial_transform(transforms.AffineTransform(2), param_scaling=param_scaling)
-    # Rigid 2D
-    param_scaling = np.array([1.0/diag, 1.0, 1.0])
-    reg.add_initial_transform(transforms.Rigid2DTransform(), param_scaling=param_scaling)
+#    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
+#    # Rigid 2D
+#    initial_transform = transforms.Rigid2DTransform()
+#    param_scaling = np.array([1.0/diag, 1.0, 1.0])
+#    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
+    # Composite scale + rigid
+    param_scaling = np.array([1.0/diag, 1.0/diag, 1.0, 1.0])
+    initial_transform = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+                                                transforms.Rigid2DTransform()])
+    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
+
 
     # Set up other registration framework parameters
     reg.set_report_freq(param_report_freq)
@@ -150,8 +164,10 @@ def main():
     ### Warp final image
     c = transforms.make_image_centered_transform(transform, ref_im, flo_im, spacing, spacing)
 
-    # Print out transformation parameters
-    print('Transformation parameters: %s.' % str(transform.get_params()))
+    # Print out transformation parameters and status
+    print('Starting from %s, optimizer terminated with message: %s'%(str(initial_transform.get_params()), \
+                                                                    reg.get_output_messages()[0]))
+    print('Final transformation parameters: %s.' % str(transform.get_params()))
 
     # Create the output image
     ref_im_warped = np.zeros(ref_im.shape)

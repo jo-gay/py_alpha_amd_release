@@ -27,7 +27,7 @@ import numpy as np
 def _default_report_callback(opt):
     iteration = opt.get_iteration()
     value = opt.get_value()
-    grad = opt.get_grad()
+    grad = opt._get_grad()
     param = opt.get_transform().get_params()
     print("#%d. --- Value: " % (iteration) + str(value) + ", Grad: " + str(grad) + ", Param: " + str(param))
 
@@ -46,34 +46,45 @@ class AdamOptimizer:
         self.param_scaling = None#np.ones((transform.get_param_count(),))
         self.last_value = np.nan
         self.last_grad = np.zeros((transform.get_param_count(),))
+        self.iterations=100
         self.iteration = 0
         self.termination_reason = ""
         self.report_freq = 1
         self.report_func = _default_report_callback
         self.value_history = []
 
-    def set_step_length(self, step_length, end_step_length = None):
+    def set_options(self, options):
+        self._set_step_length(options.get('step_length', 1), options.get('end_step_length', None))
+        self._set_adam_beta1(options.get('beta1', self.adam_beta1))
+        self._set_adam_beta2(options.get('beta2', self.adam_beta2))
+        self._set_adam_eps(options.get('eps', self.adam_eps))
+        self._set_gradient_magnitude_threshold(options.get('gradient_magnitude_threshold', self.gradient_magnitude_threshold))
+        self._set_scalings(options.get('param_scaling', self.param_scaling))
+        self.iterations = options.get('iterations', self.iterations)
+
+
+    def _set_step_length(self, step_length, end_step_length = None):
         self.step_length = step_length
         self.end_step_length = end_step_length
     
-    def set_adam_beta1(self, beta1):
+    def _set_adam_beta1(self, beta1):
         self.adam_beta1 = beta1
 
-    def set_adam_beta2(self, beta2):
+    def _set_adam_beta2(self, beta2):
         self.adam_beta2 = beta2
 
-    def set_adam_eps(self, eps):
+    def _set_adam_eps(self, eps):
         self.adam_eps = eps
 
-    def set_gradient_magnitude_threshold(self, gmt):
+    def _set_gradient_magnitude_threshold(self, gmt):
         self.gradient_magnitude_threshold = gmt
     
-    def set_scaling(self, index, scale):
+    def _set_scaling(self, index, scale):
         if self.param_scaling is None:
             self.param_scaling = np.ones((self.transform.get_param_count(),))
         self.param_scaling[index] = scale
     
-    def set_scalings(self, scalings):
+    def _set_scalings(self, scalings):
         if self.param_scaling is None:
             self.param_scaling = scalings
         else:
@@ -84,6 +95,9 @@ class AdamOptimizer:
     
     def get_termination_reason(self):
         return self.termination_reason
+
+    def get_success_flag(self):
+        return True
     
     def set_report_freq(self, freq):
         if freq < 0:
@@ -110,13 +124,13 @@ class AdamOptimizer:
     def get_value_history(self):
         return self.value_history
 
-    def get_grad(self):
+    def _get_grad(self):
         return self.last_grad
 
     def get_transform(self):
         return self.transform
     
-    def step(self, step_length, report):
+    def _step(self, step_length, report):
         (value, grad) = self.measure.value_and_derivatives(self.transform)
         self.iteration = self.iteration + 1
 
@@ -159,20 +173,20 @@ class AdamOptimizer:
 
         return res
     
-    def optimize(self, iterations):
+    def optimize(self):
         step_length = self.step_length
-        for i in range(iterations):
+        for i in range(self.iterations):
             if self.end_step_length is not None:
-                cur_step_length = step_length + (float(i)/float(iterations)) * (self.end_step_length - step_length)
+                cur_step_length = step_length + (float(i)/float(self.iterations)) * (self.end_step_length - step_length)
             else:
                 cur_step_length = step_length
 
-            if self.report_freq > 0 and (i % self.report_freq == 0 or i == iterations-1):
+            if self.report_freq > 0 and (i % self.report_freq == 0 or i == self.iterations-1):
                 report = True
             else:
                 report = False
-            if not self.step(cur_step_length, report) == 0:
-                return iterations - i
-        self.termination_reason = 'Maximum iteration count reached (%d).' % iterations
+            if not self._step(cur_step_length, report) == 0:
+                return self.iterations - i
+        self.termination_reason = 'Maximum iteration count reached (%d).' % self.iterations
 
         return 0

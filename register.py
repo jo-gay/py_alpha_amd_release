@@ -21,10 +21,7 @@
 # Registration framework base class. 
 #
 
-# Import Numpy/Scipy
 import numpy as np
-#import scipy.misc
-from matplotlib import pyplot as plt
 from PIL import Image
 
 # Import optimizers
@@ -43,10 +40,10 @@ from distances import MIDistance
 from distances import SSDistance
 from distances import dLDPDistance
 
-# Import transforms and filters
+# Import other functionality from framework
 import filters, transforms
 
-available_opts = ['adam', 'gd', 'bfgs', 'gridsearch']
+available_opts = ['adam', 'gd', 'scipy', 'gridsearch']
 available_models = ['alphaamd', 'mi', 'mse', 'dldp']
 
 class Register:
@@ -77,9 +74,9 @@ class Register:
         self.dim = dim
         self.sampling_fraction = 1.0
         
-        self.opt_opts = {'gradient_magnitude_threshold': 0.00001, \
-                         'iterations': 1500, \
-                         'step_lengths':np.array([[0.1, 1.0]])}
+        self.optimizer_opts = {'gradient_magnitude_threshold': 0.00001, \
+                                'iterations': 1500, \
+                                'step_length': np.array([[0.1, 1.0]])}
         self.opt_name = 'adam'
         self.model_opts = {}
         self.set_model('alphaamd')
@@ -108,6 +105,7 @@ class Register:
         self.report_func = None
         self.report_freq = 25
         self.flags = []
+        self.output_messages = []
 
     def add_initial_transform(self, transform, param_scaling=None):
         """Add a starting point for optimization.
@@ -201,12 +199,58 @@ class Register:
         self.sampling_fraction = sampling_fraction
     
     def set_iterations(self, iterations):
-        """Set the maximum number of iterations for the optimizer to use, where applicable."""
-        self.opt_opts['iterations'] = iterations
+        """Set the maximum number of iterations for the optimizer to use, where applicable.
+        
+        May be provided as an integer (same number of iterations for every pyramid level)
+        or a list (one entry for each pyramid level).
+        """
+        if type(iterations) is int:
+            self.optimizer_opts['iterations'] = iterations
+        else:
+            assert(len(iterations) == len(self.pyramid_factors)), \
+            "Please specify iterations for each pyramid level or a single integer for all levels"
+            self.optimizer_opts['iterations'] = iterations[:]
 
-    def set_step_lengths(self, step_lengths):
-        """Set the step length to be used by the optimizer, where applicable."""
-        self.opt_opts['step_lengths'] = np.array(step_lengths)#np.array([start_step_length, end_step_length])
+    def set_step_length(self, step_length, end_step_length):
+        """Set the step length to be used by the optimizer, where applicable.
+        
+        Args:
+            step_length: List of values. For each pyramid level, one value should
+            be given for each parameter in the transform. If a single value is given,
+            use this for all pyramid levels.
+        """
+#        if len(step_length) == 1:
+        self.optimizer_opts['step_length'] = np.array(step_length)
+        self.optimizer_opts['end_step_length'] = np.array(end_step_length)
+#        else:
+#            for lvl in range(len(self.pyramid_factors)):
+#                self.optimizer_opts[lvl]['step_length'] = np.array(step_length[lvl])#np.array([start_step_length, end_step_length])
+
+    def _get_optimizer_opts_for_level(self, p_lvl):
+        """Some optimizer options can be specified for each pyramid level. Return 
+        a dictionary of optimizer options specific to the pyramid level given.
+        Args:
+            p_lvl - integer from 0 to number of levels-1
+        """
+        lvl_opts = self.optimizer_opts.copy()
+        
+        #Which parameters can be specified per pyramid level, and how many dimensions
+        #they should have for a particular level
+        lvl_specific_opts = {'iterations':0, 'step_length':0, 'end_step_length':0}
+        
+        for key, dims in lvl_specific_opts.items():
+            try:
+                val = np.asarray(self.optimizer_opts[key])
+                if val.ndim > dims:
+                    assert(len(val) == len(self.pyramid_factors)), \
+                        f"Error in optimizer {key}, number of values given doesn't match " + \
+                        "pyramid levels"
+                    val = val[p_lvl]
+                    lvl_opts[key] = val
+            except KeyError:
+                #If the value wasn't specified then skip, the optimizer will use defaults
+                pass
+        return lvl_opts
     
     def set_model(self, model_name, **kwargs):
         """Set the model for the registration process. This determines which measure will be used
@@ -240,7 +284,7 @@ class Register:
         """
         assert(opt_name.lower() in available_opts), 'Optimizer must be one of '+','.join(available_opts)
         self.opt_name = opt_name.lower()
-        self.opt_opts = kwargs.copy()
+        self.optimizer_opts = kwargs.copy()
 
     def set_reference_image(self, image, spacing = None):
         """Set the reference image."""
@@ -285,10 +329,13 @@ class Register:
 
     def set_gradient_magnitude_threshold(self, t):
         """Set the threshold for the gradient for use with gradient descent optimizers."""
-        self.opt_opts['gradient_magnitude_threshold'] = t
+        self.optimizer_opts['gradient_magnitude_threshold'] = t
 
     def get_flags(self):
         return self.flags
+    
+    def get_output_messages(self):
+        return self.output_messages
 
     def set_report_freq(self, freq):
         self.report_freq = freq
@@ -357,7 +404,8 @@ class Register:
     def _make_dldp_dist_measure(self, ref_resampled, ref_mask_resampled, ref_weights, \
                           flo_resampled, flo_mask_resampled, flo_weights, pyramid_factor):
         dist = dLDPDistance(mode=self.model_opts.get('derivative_mode', 'difference'), \
-                            version=self.model_opts.get('version', 'dLDP_8'))
+                            version=self.model_opts.get('version', 'dLDP_8'),\
+                            interpolation=self.model_opts.get('interpolation', 'nearest'))
         dist.set_ref_image(ref_resampled, mask=ref_mask_resampled)
         dist.set_flo_image(flo_resampled)
 
@@ -381,15 +429,14 @@ class Register:
             save the downsampled images. Default None. If None, images are not saved. Only 
             applicable for 2D images
             
-        Other running parameters are set in __init()__
+        Other running parameters are set in __init__()
         """
         if len(self.pyramid_factors) == 0:
             self.add_pyramid_level(1, 0.0)
         if len(self.initial_transforms) == 0:
             self.add_initial_transform(transforms.AffineTransform(self.dim))
-        self.opt_opts['step_lengths'] = self.opt_opts.get('step_lengths',np.array([[0,1.0]]))
-        while len(self.opt_opts['step_lengths']) < len(self.pyramid_factors):
-            self.opt_opts['step_lengths'] = np.concatenate((self.opt_opts['step_lengths'], np.array([[0,1.0]])))
+#        while len(self.opt_opts['step_length']) < len(self.pyramid_factors):
+#            self.opt_opts['step_length'] = np.concatenate((self.opt_opts['step_length'], np.array([[0,1.0]])))
         
         ### Preprocessing
 
@@ -411,8 +458,6 @@ class Register:
             if pyramid_images_output_path is not None and ref_resampled.ndim == 2:
                 Image.fromarray(ref_resampled).convert('RGB').save(pyramid_images_output_path+'ref_resampled_%d.png'%(i+1))
                 Image.fromarray(flo_resampled).convert('RGB').save(pyramid_images_output_path+'flo_resampled_%d.png'%(i+1))
-#                scipy.misc.imsave('%sref_resampled_%d.png' % (pyramid_images_output_path, i+1), ref_resampled)
-#                scipy.misc.imsave('%sflo_resampled_%d.png' % (pyramid_images_output_path, i+1), flo_resampled)
             
             if self.ref_weights is None:
                 ref_weights = np.zeros(ref_resampled.shape)
@@ -425,13 +470,19 @@ class Register:
             else:
                 flo_weights = filters.downsample(self.flo_weights, factor)
 
-            if(False):
-                #Display each image with its mask to check all is ok
-                plt.subplot(121)
-                plt.imshow(np.hstack((ref_resampled, ref_mask_resampled)), cmap='gray')
-                plt.subplot(122)
-                plt.imshow(np.hstack((flo_resampled, flo_mask_resampled)), cmap='gray')
-                plt.show()
+#            #add default step length in case it wasn't specified, 
+#            #TODO can't the optimizer do this?
+#            self.optimizer_opts['step_length'] = self.optimizer_opts.get('step_length',np.array([[0.1]*pyramid_levels]))
+
+#            #DEBUG
+#            if(False):
+#                #Display each image with its mask to check all is ok
+#                plt.subplot(121)
+#                plt.imshow(np.hstack((ref_resampled, ref_mask_resampled)), cmap='gray')
+#                plt.subplot(122)
+#                plt.imshow(np.hstack((flo_resampled, flo_mask_resampled)), cmap='gray')
+#                plt.show()
+#            #END DEBUG
                 
                 
             dist_measure = self._make_dist_measure(ref_resampled, ref_mask_resampled, ref_weights, \
@@ -453,32 +504,25 @@ class Register:
 
         if self.opt_name == 'adam':
             opt = AdamOptimizer(self.distances[lvl_it], init_transform.copy())
-            opt.set_gradient_magnitude_threshold(self.opt_opts.get('gradient_magnitude_threshold', 1e-6))
         elif self.opt_name == 'gd':
             opt = GradientDescentOptimizer(self.distances[lvl_it], init_transform.copy())
-            opt.set_gradient_magnitude_threshold(self.opt_opts.get('gradient_magnitude_threshold', 1e-6))
-        elif self.opt_name == 'bfgs':
-            opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy(), method='L-BFGS-B')
-            minim_opts = {'gtol': self.opt_opts.get('gradient_magnitude_threshold', 1e-9), \
-                          'eps': self.opt_opts.get('epsilon', 0.1)}
-            opt.set_minimizer_options(minim_opts)
+#            if self.opt_opts['step_length'].ndim == 1:
+#                step_length = self.opt_opts['step_length']
+#            else:
+#                step_length=self.opt_opts['step_length'][lvl_it, :]
+        elif self.opt_name == 'scipy':
+            opt = SciPyOptimizer(self.distances[lvl_it], init_transform.copy())
+            self.optimizer_opts['method']='L-BFGS-B'
+            minim_opts = {'gtol': self.optimizer_opts.get('gradient_magnitude_threshold', 1e-9), \
+                          'eps': self.optimizer_opts.get('epsilon', 0.1)}
+            self.optimizer_opts['minimizer_opts'] = minim_opts
         elif self.opt_name == 'gridsearch':
-            opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy(), \
-                                      bounds=self.opt_opts.get('bounds', []), \
-                                      steps=self.opt_opts.get('steps', 1),
-                                      verbose=self.opt_opts.get('verbose', False))
+            opt = GridSearchOptimizer(self.distances[lvl_it], init_transform.copy())
         else:
             raise NotImplementedError(f'Sorry, optimizer {self.opt_name} has not been implemented')
-        
-        opt.set_report_freq(self.report_freq)
-        
-        if self.opt_opts['step_lengths'].ndim == 1:
-            opt.set_step_length(*self.opt_opts['step_lengths'])
-        else:
-            opt.set_step_length(*self.opt_opts['step_lengths'][lvl_it, :])
 
-        param_scaling = self.transforms_param_scaling[t_it]
-        opt.set_scalings(param_scaling)
+        self.optimizer_opts['param_scaling'] = self.transforms_param_scaling[t_it]
+        opt.set_report_freq(self.report_freq)
         
         if type(self.report_func) is list or type(self.report_func) is tuple:
             opt.set_report_callback(self.report_func[t_it])
@@ -503,20 +547,13 @@ class Register:
             init_transform = self.initial_transforms[t_it]
 
             self.value_history.append([])
-            if self.opt_name == 'bfgs':
-                self.flags.append([])
+            self.flags.append([])
 
             for lvl_it in range(pyramid_level_count):
                 opt = self._initialize_optimizer(t_it, lvl_it, init_transform)
-                
-                itercount = self.opt_opts.get('iterations', 1000)
-                if not isinstance(itercount, int):
-                    assert(len(itercount) == pyramid_level_count), \
-                            "Error in optimizer iterations, must be a single integer or " + \
-                            "list of same length as pyramid levels"
-                    itercount = self.opt_opts['iterations'][lvl_it]
-        
-                opt.optimize(itercount)
+               
+                opt.set_options(self._get_optimizer_opts_for_level(lvl_it))
+                opt.optimize()
 
                 if lvl_it + 1 == pyramid_level_count:
                     self.output_transforms.append(opt.get_transform())
@@ -526,9 +563,11 @@ class Register:
                     init_transform = opt.get_transform()
 
                 self.value_history[-1].append(opt.get_value_history())
-                if self.opt_name == 'bfgs':
-                    self.flags[-1].append(opt.success)
                 if verbose:
                     print(f'Pyramid level {lvl_it} terminating at [' + \
                           ', '.join(['%.3f']*len(opt.get_transform().get_params()))%tuple(opt.get_transform().get_params()) \
                           + '] with value %.4f'%opt.get_value())
+            #For each initial transform, record the optimizer success flag and termination reason
+            #only for the final pyramid level
+            self.flags[-1].append(opt.get_success_flag())
+            self.output_messages.append(opt.get_termination_reason())

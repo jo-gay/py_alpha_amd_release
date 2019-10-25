@@ -167,7 +167,9 @@ def binaryVectorToInt(v):
     """
     if -1 in v:
         return 0
-    return int(''.join(map(str, v)), base=2)
+    if v.shape == (8,):
+        return int(''.join(map(str, v)), base=2)
+    print('Possible error in vector:', v)
 
 """Create a vectorized version of the above to work on an ndarray
 """
@@ -320,7 +322,7 @@ class dLDPDistance:
         then rescale to values between 0 and 1. Where the descriptor contains any -1 values,
         this is mapped to zero.
         """
-        intData = binaryVectorsToInt(dLDP)
+        intData = binaryVectorsToInt(dLDP.astype(int))
         intData = intData/(pow(2, len(dLDP[0,0,:]))-1)
         return intData
     
@@ -578,7 +580,8 @@ class dLDPDistance:
         value = self.dLDPdist(self.ref_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)], \
                             warped_image_dLDP[np.logical_and(warped_mask > 0, self.ref_mask > 0)])
         
-        
+        paramstr=' '.join(['%.5f'%p for p in params])
+#        print(f'[{paramstr}] -> %.5f'%value)
 #        if value > self.best_val:
 #            self.best_val = value
 #            self.best_trans = transform.copy()
