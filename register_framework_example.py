@@ -20,29 +20,23 @@
 # IN THE SOFTWARE.
 #
 
-# Example of how to use registration framework
+# Example script showing how to use registration framework
 
-
-# Import Numpy/Scipy
+### General imports used in this example script
 import numpy as np
-
-# Import transforms
-import transforms
-
-# Import generators and filters
-import filters
-
-# Import registration framework
-from register import Register
-
-# Import misc
 import sys
 import time
 import os
 from PIL import Image
 
+### Imports for registration framework
+import transforms
+import filters
+from register import Register
 
-# Registration Parameters
+
+### Set registration parameters for alphaAMD model
+# Levels
 alpha_levels = 7
 # Pixel-size
 spacing = np.array([1.0, 1.0])
@@ -51,14 +45,15 @@ symmetric_measure = True
 # Use the squared Euclidean distance
 squared_measure = False
 
-# The number of iterations
+### General registration parameters
+# The number of iterations (unless gradient threshold reached)
 param_iterations = 2000
 # The fraction of the points to sample randomly (0.0-1.0)
 param_sampling_fraction = 0.25
 # Number of iterations between each printed output (with current distance/gradient/parameters)
 param_report_freq = 500
 
-# Directory to save output files - any existing files will be overwritten
+### Directory to save output files - any existing files will be overwritten
 outdir = './test_images/output/'
 
 def main():
@@ -72,16 +67,17 @@ def main():
     ref_im_path = sys.argv[1]
     flo_im_path = sys.argv[2]
 
+    ### Open the images to be registered and convert to greyscale with intensity between 0-1
     ref_im = Image.open(ref_im_path).convert('L')
     flo_im = Image.open(flo_im_path).convert('L')
     ref_im = np.asarray(ref_im)/255.
     flo_im = np.asarray(flo_im)/255.
 
-    # Make copies of original images
+    ### Make copies of original images
     ref_im_orig = ref_im.copy()
     flo_im_orig = flo_im.copy()
 
-    # Preprocess images
+    ### Preprocess images
     ref_im = filters.normalize(ref_im, 0.0, None)
     flo_im = filters.normalize(flo_im, 0.0, None)
 
@@ -90,73 +86,80 @@ def main():
     weights2 = np.ones(flo_im.shape)
     mask2 = np.ones(flo_im.shape, 'bool')
 
-    # Initialize registration framework for 2d images
+    ### Initialize registration framework for 2d images
     reg = Register(2)
     reg.set_image_data(ref_im, flo_im, mask1, mask2, weights1, weights2)
     
-    # Choose a registration model
+    ### Choose a registration model
     reg.set_model('alphaAMD', alpha_levels=alpha_levels, \
                   symmetric_measure=symmetric_measure, \
                   squared_measure=squared_measure)
+#    reg.set_model('mi')
     
-    # Setup the Gaussian pyramid resolution levels
+    ### Setup the Gaussian pyramid resolution levels (if required)
     reg.add_pyramid_level(4, 5.0)
     reg.add_pyramid_level(2, 3.0)
     reg.add_pyramid_level(1, 0.0)
 
-    # Choose an optimizer and set optimizer-specific parameters
-    # For GD and adam, learning-rate / Step lengths given by [[start1, end1], [start2, end2] ...] (for each pyramid level)
-    reg.set_optimizer('adam', \
-                      gradient_magnitude_threshold=0.01, \
-                      iterations=param_iterations
-                      )
+    ### Scale all transform parameters to approximately the same order of magnitude, based on sizes of images
+    diag = 0.5 * (transforms.image_diagonal(ref_im, spacing) + transforms.image_diagonal(flo_im, spacing))
+
+    ### Create the initial transform and add it to the registration framework 
+    ### (switch between affine/rigid transforms by commenting/uncommenting)
+#    # e.g. Affine
+#    initial_transform = transforms.AffineTransform(2)
+#    param_scaling = np.array([1.0/diag, 1.0/diag, 1.0/diag, 1.0/diag, 1.0, 1.0])
+    # e.g. Rigid 2D
+    initial_transform = transforms.Rigid2DTransform()
+    param_scaling = np.array([1.0/diag, 1.0, 1.0])
+#    # e.g. Composite scale + rigid
+#    param_scaling = np.array([1.0/diag, 1.0/diag, 1.0, 1.0])
+#    initial_transform = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
+#                                                transforms.Rigid2DTransform()])
+
+    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
+
+
+    ### Choose an optimizer and set optimizer-specific parameters
+    ### For GD and adam, learning-rate / Step lengths given by [[start1, end1], [start2, end2] ...] (for each pyramid level)
+    ### For gridsearch, bounds are specified for each parameter in the transform chosen above (e.g. Affine: 6 params)
+#    reg.set_optimizer('adam', \
+#                      gradient_magnitude_threshold=0.01, \
+#                      iterations=param_iterations
+#                      )
 #    reg.set_optimizer('gd', \
 #                      step_length=np.array([1., 0.5, 0.25]), \
 #                      end_step_length=np.array([0.4, 0.2, 0.01]), \
 #                      gradient_magnitude_threshold=0.01, \
 #                      iterations=param_iterations
 #                      )
+    reg.set_optimizer('gridsearch', \
+                      bounds=[[-0.5,0.5],[-5,5],[-5,5]], \
+                      steps=21 \
+                      )
 #    reg.set_optimizer('scipy', \
 #                      iterations=param_iterations, \
-#                      epsilon=0.001 \
+#                      epsilon=0.00001 \
 #                      )
 
-    # Scale all transform parameters to approximately the same order of magnitude, based on sizes of images
-    diag = 0.5 * (transforms.image_diagonal(ref_im, spacing) + transforms.image_diagonal(flo_im, spacing))
-
-    # Create the initial transform and add it to the registration framework 
-    # (switch between affine/rigid transforms by commenting/uncommenting)
-#    # Affine
-#    initial_transform = transforms.AffineTransform(2)
-#    param_scaling = np.array([1.0/diag, 1.0/diag, 1.0/diag, 1.0/diag, 1.0, 1.0])
-#    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
-#    # Rigid 2D
-#    initial_transform = transforms.Rigid2DTransform()
-#    param_scaling = np.array([1.0/diag, 1.0, 1.0])
-#    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
-    # Composite scale + rigid
-    param_scaling = np.array([1.0/diag, 1.0/diag, 1.0, 1.0])
-    initial_transform = transforms.CompositeTransform(2, [transforms.ScalingTransform(2, uniform=True), \
-                                                transforms.Rigid2DTransform()])
-    reg.add_initial_transform(initial_transform, param_scaling=param_scaling)
 
 
-    # Set up other registration framework parameters
+    ### Set up other registration framework parameters
     reg.set_report_freq(param_report_freq)
     reg.set_sampling_fraction(param_sampling_fraction)
 
-    # Create output directory
+    ### Create output directory
     directory = os.path.dirname(outdir)
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    # Start the pre-processing
+    ### Start the pre-processing
     reg.initialize(outdir)
     
-    # Control the formatting of numpy
+    ### Control the formatting of numpy
     np.set_printoptions(suppress=True, linewidth=200)
 
-    # Start the registration
+    ### Start the registration
     reg.run()
 
     (transform, value) = reg.get_output(0)
@@ -164,28 +167,29 @@ def main():
     ### Warp final image
     c = transforms.make_image_centered_transform(transform, ref_im, flo_im, spacing, spacing)
 
-    # Print out transformation parameters and status
+    ### Print out transformation parameters and status
     print('Starting from %s, optimizer terminated with message: %s'%(str(initial_transform.get_params()), \
                                                                     reg.get_output_messages()[0]))
     print('Final transformation parameters: %s.' % str(transform.get_params()))
 
-    # Create the output image
+    ### Create the output image
     ref_im_warped = np.zeros(ref_im.shape)
     mask = np.ones(flo_im_orig.shape, dtype='bool')
     warped_mask = np.zeros(ref_im.shape, dtype='bool')
 
-    # Transform the floating image into the reference image space by applying transformation 'c'
+    ### Transform the floating image into the reference image space by applying transformation 'c'
     c.warp(In = flo_im_orig, Out = ref_im_warped, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
     c.warp(In = mask, Out = warped_mask, in_spacing=spacing, out_spacing=spacing, mode='spline', bg_value = 0.0)
 
-    # Save the registered image
+    ### Save the registered image
     Image.fromarray(ref_im_warped).convert('RGB').save(outdir+'registered.png')
     
-    # Compute the absolute difference image between the reference and registered images
+    ### Compute the absolute difference image between the reference and registered images
     D1 = np.abs(ref_im_orig-ref_im_warped)
     err = np.mean(D1[warped_mask])
     print("Err: %f" % err)
 
+    ### Save the difference image to file
     Image.fromarray(D1).convert('RGB').save(outdir+'diff.png')
 
     return True
