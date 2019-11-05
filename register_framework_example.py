@@ -68,19 +68,11 @@ def main():
     flo_im_path = sys.argv[2]
 
     ### Open the images to be registered and convert to greyscale with intensity between 0-1
-    ref_im = Image.open(ref_im_path).convert('L')
-    flo_im = Image.open(flo_im_path).convert('L')
-    ref_im = np.asarray(ref_im)/255.
-    flo_im = np.asarray(flo_im)/255.
+    preproc = {'norm':True}
+    ref_im, ref_im_orig = filters.openAndPreProcessImage(ref_im_path, copyOrig=True, preproc=preproc)
+    flo_im, flo_im_orig = filters.openAndPreProcessImage(flo_im_path, copyOrig=True, preproc=preproc)
 
-    ### Make copies of original images
-    ref_im_orig = ref_im.copy()
-    flo_im_orig = flo_im.copy()
-
-    ### Preprocess images
-    ref_im = filters.normalize(ref_im, 0.0, None)
-    flo_im = filters.normalize(flo_im, 0.0, None)
-
+    ### All pixels in the images will be included, and weighted equally
     weights1 = np.ones(ref_im.shape)
     mask1 = np.ones(ref_im.shape, 'bool')
     weights2 = np.ones(flo_im.shape)
