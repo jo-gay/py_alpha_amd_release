@@ -1,7 +1,7 @@
 
 #
 # Py-Alpha-AMD Registration Framework
-# Author: Johan Ofverstedt
+# Author: Johan Ofverstedt, Jo Gay
 # Reference: Fast and Robust Symmetric Image Registration Based on Distances Combining Intensity and Spatial Information
 #
 # Copyright 2019 Johan Ofverstedt
@@ -25,6 +25,82 @@
 # Import Numpy/Scipy
 import numpy as np
 import scipy.ndimage as ndimage
+
+def image_histogram_equalization(image, number_bins=256):
+    """ Apply histogram equalization to an image and return the equalized image.
+    Adapted from
+    https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/py_histogram_equalization.html
+    
+    Arguments:
+        image       : 2D ndarray of floating point values between 0 and 1
+        number_bins : How many bins should be used to create the equalized image, max 256.
+                      NOTE: Tested only with 256 bins.
+
+    Returns:
+        2D ndarray of fp values between 0 and 1
+    
+    """
+    hist, bins = np.histogram(image.flatten()*(number_bins-1),number_bins,[0,number_bins])
+
+    cdf = hist.cumsum()
+    
+    cdf_m = np.ma.masked_equal(cdf,0) #mask out anything below the minimum intensity
+    cdf_m = number_bins*(cdf_m - cdf_m.min())/(cdf_m.max()-cdf_m.min())
+    cdf = np.ma.filled(cdf_m,0)
+    image_rint = np.rint(image*(number_bins-1)).astype('uint8')
+    return (cdf[image_rint.flatten()]/number_bins).reshape(image.shape)
+
+
+def add_noise(image, noise_type, gauss_amount=0.4, sp_amount=0.004):
+    """
+    Arguments:
+    image : ndarray
+        Input image data as floating point ndarray
+    mode : str
+        One of the following strings, selecting the type of noise to add:
+    
+        'gauss'     Gaussian-distributed additive noise.
+        'poisson'   Poisson-distributed noise generated from the data.
+        's&p'       Replaces random pixels with 0 or 1.
+        'speckle'   Multiplicative noise using out = image + n*image,where
+                    n,is uniform noise with specified mean & variance.
+    gauss_amount : float (default 0.004). 
+        For Gaussian noise, the weighting for the standard deviation of the noise
+    sp_amount : float (default 0.004). 
+        For S&P noise, the proportion of pixels that will be affected
+    Returns:
+        ndarray of image with noise added
+        
+    Adapted from an answer to 
+    https://stackoverflow.com/questions/14435632/impulse-gaussian-and-salt-and-pepper-noise-with-opencv
+    by Shubham Pachori
+    """
+    if noise_type.lower() == "gauss":
+        gauss = np.random.normal(0,image.std()*gauss_amount,image.shape)
+        return image + gauss
+    elif noise_type.lower() == "s&p":
+        s_vs_p = 0.5
+        out = image.copy()
+        # Salt mode
+        num_salt = np.ceil(sp_amount * image.size * s_vs_p)
+        coords = [np.random.randint(0, i - 1, int(num_salt))
+                  for i in image.shape]
+        out[tuple(coords)] = 1
+        # Pepper mode
+        num_pepper = np.ceil(sp_amount * image.size * (1. - s_vs_p))
+        coords = [np.random.randint(0, i - 1, int(num_pepper))
+                  for i in image.shape]
+        out[tuple(coords)] = 0
+        return out
+    elif noise_type.lower() == "poisson":
+        vals = len(np.unique(image))
+        vals = 2 ** np.ceil(np.log2(vals))
+        return np.random.poisson(image * vals) / float(vals)
+    elif noise_type.lower() == "speckle":
+        gauss = np.random.randn(*image.shape)
+        return image + image * gauss
+
+    raise NotImplementedError(f"Noise type {noise_type} not recognized")
 
 def gaussian_filter(image, sigma):
     if sigma <= 0.0:
