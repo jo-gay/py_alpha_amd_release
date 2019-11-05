@@ -23,7 +23,7 @@ The optimizers seek the transformation parameters which minimize the cost functi
 
 ## Available optimizers
 **Gradient Descent**
-- Follow gradient calculated by distance measure, with configurable learning rate, stopping conditions etc
+- Follow gradient (as calculated by distance measure), with configurable learning rate, stopping conditions etc
 
 **Adam**
 - Optimize using Adam algorithm, with configurable parameters
@@ -40,11 +40,11 @@ The optimizers seek the transformation parameters which minimize the cost functi
 - Completely python/numpy/scipy based codebase. No C/C++/... code, which should facilitate portability and understandability.
 
 ## Usage example
-Try out the sample script provided:
+Try out the sample script provided, to register two versions of an image of cilia (one has been rotated by 20 degrees):
 - python3 register\_framework\_example.py ./test\_images/reference\_example.png ./test\_images/floating\_example.png
 
 ## Installation
-Clone the project and then install the prerequisites e.g.
+Clone the project from github, and then install the prerequisites e.g.
 
 **pip**
 - pip install -r requirements.txt
@@ -123,7 +123,6 @@ supply [1./50,1.,1.] to treat one fiftieth of a radian rotation equivalently to 
 - minimizer_opts: Optional dictionary. Any options to be passed on to the scipy minimizer function
 - reset_minimizer: Boolean, default False. Clear out any existing stored values in minimizer_opts before
 updating with the new ones given.
-
 
 #### gridsearch: Exhaustive search over a grid (./optimizers/grid_search_optimizer.py)
 - bounds: List of lists. For each parameter applicable in the chosen type of transform, provide a list
